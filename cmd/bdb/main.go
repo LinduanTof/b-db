@@ -14,14 +14,23 @@ import (
 	"github.com/linduan-guan/b-db/internal/i18n"
 )
 
+var version = "dev"
+
 func main() {
 	var configPath string
+	var showVersion bool
 	flag.StringVar(&configPath, "config", "", "path to config file (default: $XDG_CONFIG_HOME/bdb/config.yaml)")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: bdb [--config FILE] [script.sql]\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("bdb %s\n", version)
+		return
+	}
 
 	if flag.NArg() > 1 {
 		fmt.Fprintln(os.Stderr, "bdb: only one SQL script may be given")

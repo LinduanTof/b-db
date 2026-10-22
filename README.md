@@ -2,13 +2,15 @@
 
 一款面向 Linux 终端的现代化数据库管理工具，使用 Go + [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) 构建。目标是在一个终端窗口内完成连接管理、库表浏览、SQL 编辑执行、数据编辑与导出。
 
-当前完成 **P1**：PostgreSQL/SQLite/MySQL 浏览与查询、表结构详情、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、结果网格增强、6 套可持久化主题、SQL 语法高亮与自动补全，以及界面内添加数据源。
+已完成：PostgreSQL/MySQL/SQLite 浏览与查询、事务化数据编辑、Redis/MongoDB、多会话、表结构/DDL/索引、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、6 套主题、SQL 语法高亮与自动补全、专注布局与鼠标操作。
 
 ## 快速开始
 
 要求 Go 1.26+。
 
 ```bash
+go install github.com/linduan-guan/b-db/cmd/bdb@latest
+# 或本地构建
 make demo-db     # 生成 SQLite 示例库 testdata/demo.db
 make build
 ./bin/bdb --config config.example.yaml
@@ -76,6 +78,8 @@ connections:
 | 结果 | `g` / `G` | 首行 / 末行 |
 | 结果 | `H` / `L` | 向左 / 向右翻一屏列 |
 | 结果 | `Enter` / `v` | 查看当前单元格的完整内容 |
+| 结果 | `e` | 编辑当前单元格 |
+| 结果 | `x` | 删除当前行 |
 | 结果 | `[` / `]` | 减小 / 增大当前列宽 |
 | 结果 | `o` / `O` | 按当前列排序（升/降）/ 清除排序 |
 | 结果 | `c` | 复制当前单元格（OSC 52） |
@@ -136,6 +140,38 @@ connections:
 - 查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc` 或 `q` 关闭
 - `[`/`]` 调整当前列宽，`o`/`O` 排序，`c` 复制单元格
 
+## 数据编辑
+
+仅当结果通过「表操作菜单 → View data」打开、且表有主键时启用：
+
+- `e` 编辑当前单元格：输入新值 → 预览 `UPDATE` SQL → `y` 确认执行
+- `x` 删除当前行：预览 `DELETE` SQL → `y` 确认执行
+- 写入在事务中执行，影响行数必须为 1
+- 连接配置 `read_only: true` 时禁止编辑
+- 表操作菜单的「Insert row template」会生成 `INSERT` 模板到编辑器
+
+## Redis 与 MongoDB
+
+Redis：
+
+- 侧栏按 db → key 浏览（SCAN，最多 500 个键）
+- 表操作菜单 View data 会按 key 类型生成 `GET` / `HGETALL` / `LRANGE` / `SMEMBERS` / `ZRANGE` / `XRANGE`
+- 编辑器可直接输入 Redis 命令，如 `SCAN 0 COUNT 50`、`GET "my key"`
+
+MongoDB：
+
+- 侧栏按 database → collection 浏览
+- 编辑器查询语法：
+  - `find <db>.<collection> [json]`
+  - `findOne <db>.<collection> [json]`
+  - `aggregate <db>.<collection> [json array]`
+  - `count <db>.<collection> [json]`
+- 表操作菜单 View data 会生成 `find db.collection {}`
+
+## 多会话
+
+每个连接作为独立会话保留编辑器内容、结果网格、补全与编辑缓存。在侧栏切换到另一个配置连接时自动保存当前状态，切回时恢复；断开当前连接不会影响其他会话。
+
 ## 表操作菜单
 
 在侧栏选中表后按 `Enter` 打开：
@@ -187,10 +223,21 @@ mysql -h 127.0.0.1 -ubdb -pbdb bdb
 
 若本地端口已被占用，可用环境变量覆盖：`BDB_PG_PORT=5433 BDB_MYSQL_PORT=3307 docker compose ... up -d`。
 
+性能基准：
+
+```bash
+go test -bench . -benchmem ./internal/ui/results ./internal/ui/editor
+```
+
+静态发布：
+
+```bash
+make release          # 生成 dist/bdb-linux-amd64、arm64 与 checksums.txt
+goreleaser release --clean
+```
+
 ## 路线图
 
-- **P2**：数据编辑（主键定位、事务、SQL 预览与确认）、语法高亮编辑器。
-- **P3**：Redis、MongoDB、多会话。
-- **P4**：性能基准、静态二进制发布。
+P2/P3/P4 已完成：事务化数据编辑、SQL 语法高亮、Redis/MongoDB、多会话、性能基准与静态发布。
 
-已完成：主题系统、SQL 自动补全。
+后续可扩展：SSH 隧道、TLS、Redis/MongoDB 写入、插入行表单、更多导出格式。
