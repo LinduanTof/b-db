@@ -1,0 +1,427 @@
+package app
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/linduan/bdb/internal/config"
+	"github.com/linduan/bdb/internal/history"
+	"github.com/linduan/bdb/internal/i18n"
+	"github.com/linduan/bdb/internal/ui/command"
+	"github.com/linduan/bdb/internal/ui/sidebar"
+)
+
+func testModel(t *testing.T, lang string) *Model {
+	t.Helper()
+	dbPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "demo.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		DefaultConnection: "local-sqlite",
+		UI:                config.UIConfig{Language: lang},
+		Query:             config.QueryConfig{Timeout: config.Duration(5 * time.Second), MaxRows: 100},
+		Connections: []config.Connection{
+			{Name: "local-sqlite", Type: config.TypeSQLite, Path: dbPath},
+		},
+	}
+	m := New(cfg, i18n.New(lang))
+	model, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	return model.(*Model)
+}
+
+func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
+	t.Helper()
+	const maxSteps = 10
+	for i := 0; i < maxSteps && cmd != nil; i++ {
+		msg := cmd()
+		if msg == nil {
+			return m
+		}
+		switch msg.(type) {
+		case connOpenedMsg, queryDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
+			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
+			sidebar.ConnectMsg, sidebar.SelectTableMsg, command.SelectedMsg:
+		default:
+			return m
+		}
+		model, next := m.Update(msg)
+		m = model.(*Model)
+		cmd = next
+	}
+	return m
+}
+
+func sendKey(t *testing.T, m *Model, msg tea.KeyPressMsg) *Model {
+	t.Helper()
+	model, cmd := m.Update(msg)
+	return runCmd(t, model.(*Model), cmd)
+}
+
+func connect(t *testing.T, m *Model) *Model {
+	t.Helper()
+	cmd := m.connectCmd("local-sqlite")
+	model, next := m.Update(cmd())
+	m = runCmd(t, model.(*Model), next)
+	if m.conn == nil {
+		t.Fatalf("connection failed: %s", m.status)
+	}
+	return m
+}
+
+func TestEscOpensPaletteOverlay(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if !m.command.IsOpen() {
+		t.Fatal("esc should open the command palette")
+	}
+	content := m.View().Content
+	if !strings.Contains(content, "Command palette") {
+		t.Fatalf("palette missing:\n%s", content)
+	}
+	if !strings.Contains(content, "Connections") {
+		t.Fatalf("overlay should keep the background visible:\n%s", content)
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) != 30 {
+		t.Fatalf("lines = %d, want 30", len(lines))
+	}
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != 100 {
+			t.Fatalf("line %d width = %d, want 100", i, w)
+		}
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.command.IsOpen() {
+		t.Fatal("esc should close the palette")
+	}
+}
+
+func TestQuitKeys(t *testing.T) {
+	m := testModel(t, "en")
+	_, cmd := m.Update(tea.KeyPressMsg{Text: "q"})
+	if cmd == nil {
+		t.Fatal("q should request quit outside the editor")
+	}
+
+	m.focus = focusEditor
+	_ = m.editor.Focus()
+	m.editor.SetValue("")
+	model, _ := m.Update(tea.KeyPressMsg{Text: "q"})
+	m = model.(*Model)
+	if got := m.editor.Value(); got != "q" {
+		t.Fatalf("editor value = %q, want q", got)
+	}
+}
+
+func TestStatusbarMenuHint(t *testing.T) {
+	m := testModel(t, "en")
+	for _, want := range []string{"Esc menu", "q quit", "? help"} {
+		if !strings.Contains(m.View().Content, want) {
+			t.Fatalf("status bar missing %q", want)
+		}
+	}
+}
+
+func TestHelpShowsShortcutsAndCommands(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "?"})
+	content := m.View().Content
+	for _, want := range []string{"Keyboard shortcuts", "Commands", ":connect", ":export", "ctrl+enter"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("help missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestCommandPalette(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
+	if !m.command.IsOpen() {
+		t.Fatal("palette should open on ':'")
+	}
+	if content := m.View().Content; !strings.Contains(content, "Command palette") {
+		t.Fatalf("palette view:\n%s", content)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "lang en"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.command.IsOpen() {
+		t.Fatal("palette should close after running a command")
+	}
+	if m.t.Lang() != i18n.En {
+		t.Fatalf("lang = %q", m.t.Lang())
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "focus results"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "lang zh"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.t.Lang() != i18n.Zh {
+		t.Fatalf("lang = %q, want zh", m.t.Lang())
+	}
+	if !strings.Contains(m.status, "界面语言") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestCommandDisconnect(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "disconnect"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.conn != nil || m.connName != "" {
+		t.Fatalf("connection not closed: conn=%v name=%q", m.conn, m.connName)
+	}
+	if strings.Contains(m.sidebar.View(), "main") {
+		t.Fatalf("sidebar still shows schema after disconnect:\n%s", m.sidebar.View())
+	}
+}
+
+func TestTableDetail(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for i := 0; i < 3; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "d"})
+	if !m.detail.IsOpen() {
+		t.Fatalf("detail should open, status=%s", m.status)
+	}
+	content := m.View().Content
+	for _, want := range []string{"Table structure: users", "email", "Indexes", "Foreign keys"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("detail missing %q:\n%s", want, content)
+		}
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.detail.IsOpen() {
+		t.Fatal("esc should close detail")
+	}
+}
+
+func TestScriptExecution(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	path := filepath.Join(t.TempDir(), "script.sql")
+	if err := os.WriteFile(path, []byte("SELECT 1 AS a;\n-- comment;\nSELECT 2 AS b;"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m = runCmd(t, m, m.runScriptCmd(path))
+	if !strings.Contains(m.status, "2/2") {
+		t.Fatalf("status = %q", m.status)
+	}
+	rs := m.results.Result()
+	if rs == nil || len(rs.Rows) != 1 {
+		t.Fatalf("result = %#v", rs)
+	}
+	if got := rs.Rows[0][0]; got != int64(2) {
+		t.Fatalf("last result = %#v, want 2", got)
+	}
+}
+
+func TestCopyCellAndMarkdownExport(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.outDir = t.TempDir()
+
+	m.editor.SetValue("SELECT name FROM users ORDER BY id LIMIT 1;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "c"})
+	if !strings.Contains(m.status, "Copied") {
+		t.Fatalf("copy status = %q", m.status)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'm', Mod: tea.ModCtrl})
+	entries, err := os.ReadDir(m.outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasSuffix(entries[0].Name(), ".md") {
+		t.Fatalf("exports = %v", entries)
+	}
+	data, err := os.ReadFile(filepath.Join(m.outDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "| name |") || !strings.Contains(string(data), "张三") {
+		t.Fatalf("markdown export:\n%s", data)
+	}
+}
+
+func TestHistoryStore(t *testing.T) {
+	m := testModel(t, "en")
+	store := history.Load(filepath.Join(t.TempDir(), "history"), 10)
+	m.SetHistory(store)
+
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.editor.SetValue("SELECT 1;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+
+	if entries := store.Entries(); len(entries) != 1 || entries[0] != "SELECT 1;" {
+		t.Fatalf("history = %#v", entries)
+	}
+}
+
+func TestKeyStrings(t *testing.T) {
+	if got := (tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl}).String(); got != "ctrl+enter" {
+		t.Fatalf("ctrl+enter = %q", got)
+	}
+	if got := (tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}).String(); got != "shift+tab" {
+		t.Fatalf("shift+tab = %q", got)
+	}
+}
+
+func TestLayoutAndFocus(t *testing.T) {
+	m := testModel(t, "en")
+	content := m.View().Content
+	if !strings.Contains(content, "Connections") || !strings.Contains(content, "SQL") || !strings.Contains(content, "Results") {
+		t.Fatalf("panes missing:\n%s", content)
+	}
+	if got := strings.Count(content, "\n") + 1; got != 30 {
+		t.Fatalf("rendered %d lines, want 30", got)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.focus != focusEditor {
+		t.Fatalf("focus = %v, want editor", m.focus)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.focus != focusEditor {
+		t.Fatalf("focus = %v, want editor after shift+tab", m.focus)
+	}
+}
+
+func TestQueryFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	if !strings.Contains(m.sidebar.View(), "main") {
+		t.Fatalf("sidebar should show schema main:\n%s", m.sidebar.View())
+	}
+
+	m.editor.SetValue("SELECT id, name, email FROM users ORDER BY id;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+
+	rs := m.results.Result()
+	if rs == nil {
+		t.Fatalf("no result, status=%s", m.status)
+	}
+	if len(rs.Rows) != 5 {
+		t.Fatalf("rows = %d, want 5", len(rs.Rows))
+	}
+	content := m.View().Content
+	if !strings.Contains(content, "张三") {
+		t.Fatalf("rendered view should contain CJK data:\n%s", content)
+	}
+	if !strings.Contains(m.status, "5 row(s)") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestSidebarBrowseAndSelect(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if !strings.Contains(m.sidebar.View(), "users") {
+		t.Fatalf("sidebar should list tables:\n%s", m.sidebar.View())
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 's'})
+	if m.focus != focusEditor {
+		t.Fatalf("focus = %v, want editor after select", m.focus)
+	}
+	if got := m.editor.Value(); !strings.Contains(got, "users") {
+		t.Fatalf("editor value = %q", got)
+	}
+}
+
+func TestExportCSV(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.outDir = t.TempDir()
+
+	m.editor.SetValue("SELECT id, name FROM users ORDER BY id;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+
+	model, cmd = m.Update(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.results.Result() == nil {
+		t.Fatal("result lost after export")
+	}
+	if !strings.Contains(m.status, "bdb-export-") {
+		t.Fatalf("status = %q", m.status)
+	}
+}

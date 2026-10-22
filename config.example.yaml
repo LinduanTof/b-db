@@ -1,0 +1,42 @@
+default_connection: local-sqlite
+
+ui:
+  # auto | en | zh
+  language: auto
+
+query:
+  timeout: 30s
+  max_rows: 1000
+
+connections:
+  - name: local-sqlite
+    type: sqlite
+    path: ./testdata/demo.db
+
+  # PostgreSQL example. ${PG_PASSWORD} must be set before starting bdb;
+  # a missing variable is reported as an error instead of silently using "".
+  # - name: local-pg
+  #   type: postgres
+  #   host: 127.0.0.1
+  #   port: 5432
+  #   user: postgres
+  #   password: ${PG_PASSWORD}
+  #   database: bdb
+  #   sslmode: disable
+
+  # MySQL / MariaDB (supported). Uncomment and set MYSQL_PASSWORD in the environment.
+  # - name: local-mysql
+  #   type: mysql
+  #   host: 127.0.0.1
+  #   port: 3306
+  #   user: bdb
+  #   password: ${MYSQL_PASSWORD}
+  #   database: bdb
+
+  # Redis / MongoDB (implemented in P3)
+  # - name: cache
+  #   type: redis
+  #   addr: 127.0.0.1:6379
+  # - name: docs
+  #   type: mongo
+  #   uri: mongodb://127.0.0.1:27017

@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: bdb
+      POSTGRES_PASSWORD: bdb
+      POSTGRES_DB: bdb
+    ports:
+      - "${BDB_PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bdb -d bdb"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  mysql:
+    image: mysql:8.0
+    command: ["--default-authentication-plugin=mysql_native_password"]
+    environment:
+      MYSQL_ROOT_PASSWORD: bdb
+      MYSQL_DATABASE: bdb
+      MYSQL_USER: bdb
+      MYSQL_PASSWORD: bdb
+    ports:
+      - "${BDB_MYSQL_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin status -h127.0.0.1 -ubdb -pbdb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Enabled in P3
+  # redis:
+  #   image: redis:7
+  #   ports:
+  #     - "6379:6379"
+  # mongo:
+  #   image: mongo:7
+  #   ports:
+  #     - "27017:27017"
