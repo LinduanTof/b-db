@@ -41,6 +41,7 @@ type Model struct {
 
 	width, height int
 	open          bool
+	title         string
 	items         []Item
 	selected      int
 }
@@ -53,8 +54,9 @@ func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 }
 
-func (m *Model) Open(items []Item) {
+func (m *Model) Open(title string, items []Item) {
 	m.open = true
+	m.title = title
 	m.items = append([]Item(nil), items...)
 	m.selected = 0
 	if len(m.items) > 0 {
@@ -107,7 +109,10 @@ func (m *Model) View() string {
 	}
 	contentW := max(24, boxW-6)
 
-	title := m.t.T(i18n.KeyMenuTitle)
+	title := m.title
+	if title == "" {
+		title = m.t.T(i18n.KeyMenuTitle)
+	}
 	titlePad := max(0, (contentW-textutil.Width(title))/2)
 	lines := []string{
 		strings.Repeat(" ", titlePad) + theme.Title.Render(title),

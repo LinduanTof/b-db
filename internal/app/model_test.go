@@ -58,7 +58,8 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 		case connOpenedMsg, queryDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
-			sidebar.ConnectMsg, sidebar.SelectTableMsg, menu.ActionMsg, menu.ChangedMsg:
+			sidebar.ConnectMsg, sidebar.SelectTableMsg, sidebar.TableMenuMsg,
+			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg:
 		default:
 			return m
 		}
@@ -441,6 +442,99 @@ func TestAddConnectionCancel(t *testing.T) {
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.connForm.IsOpen() {
 		t.Fatal("esc should close the form")
+	}
+}
+
+func TestTableActionsMenu(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for i := 0; i < 3; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.tableMenu.IsOpen() {
+		t.Fatalf("table menu should open, status=%s", m.status)
+	}
+	content := m.View().Content
+	for _, want := range []string{"users", "View data", "View DDL", "View structure", "View indexes", "Generate SELECT"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("table menu missing %q:\n%s", want, content)
+		}
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.textView.IsOpen() {
+		t.Fatalf("DDL viewer should open, status=%s", m.status)
+	}
+	ddlView := m.View().Content
+	if !strings.Contains(ddlView, "DDL: users") || !strings.Contains(ddlView, "CREATE TABLE users") {
+		t.Fatalf("DDL view:\n%s", ddlView)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.textView.IsOpen() {
+		t.Fatal("esc should close the DDL viewer")
+	}
+}
+
+func TestTableDataAction(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for i := 0; i < 3; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	rs := m.results.Result()
+	if rs == nil || len(rs.Rows) != 5 {
+		t.Fatalf("result = %#v, status=%s", rs, m.status)
+	}
+	if !strings.Contains(m.editor.Value(), "users") {
+		t.Fatalf("editor = %q", m.editor.Value())
+	}
+}
+
+func TestTableIndexesAction(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for i := 0; i < 3; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for i := 0; i < 3; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.textView.IsOpen() {
+		t.Fatalf("index viewer should open, status=%s", m.status)
+	}
+	if !strings.Contains(m.View().Content, "Indexes: users") {
+		t.Fatalf("index view:\n%s", m.View().Content)
 	}
 }
 

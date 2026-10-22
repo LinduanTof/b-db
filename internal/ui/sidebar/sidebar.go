@@ -58,6 +58,8 @@ type ConnectMsg struct{ Name string }
 
 type SelectTableMsg struct{ Schema, Table string }
 
+type TableMenuMsg struct{ Schema, Table string }
+
 func MsgError(msg any) error {
 	switch m := msg.(type) {
 	case SchemasLoadedMsg:
@@ -246,6 +248,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		if n.Kind == KindConnection && n.ConnName != m.connName {
 			name := n.ConnName
 			return func() tea.Msg { return ConnectMsg{Name: name} }
+		}
+		if n.Kind == KindTable {
+			schema, table := n.Schema, n.Table
+			return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table} }
 		}
 		return m.toggle(n)
 	case "s":

@@ -23,7 +23,7 @@ func testItems() []Item {
 func newOpen() Model {
 	m := New(i18n.New("en"))
 	m.SetSize(100, 30)
-	m.Open(testItems())
+	m.Open("", testItems())
 	return m
 }
 

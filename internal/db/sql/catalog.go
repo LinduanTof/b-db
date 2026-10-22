@@ -4,6 +4,7 @@ import (
 	"context"
 	stdsql "database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/linduan/bdb/internal/db"
 )
@@ -72,6 +73,19 @@ func (k catalog) ForeignKeys(ctx context.Context, schema, table string) ([]db.Fo
 		return k.sqliteForeignKeys(ctx, table)
 	default:
 		return nil, fmt.Errorf("catalog not implemented for %s", k.c.typ)
+	}
+}
+
+func (k catalog) DDL(ctx context.Context, schema, table string) (string, error) {
+	switch k.c.typ {
+	case "postgres":
+		return k.pgDDL(ctx, schema, table)
+	case "mysql":
+		return k.mysqlDDL(ctx, schema, table)
+	case "sqlite":
+		return k.sqliteDDL(ctx, table)
+	default:
+		return "", fmt.Errorf("DDL not implemented for %s", k.c.typ)
 	}
 }
 
@@ -221,6 +235,95 @@ func (k catalog) pgForeignKeys(ctx context.Context, schema, table string) ([]db.
 	return out, rows.Err()
 }
 
+func (k catalog) pgDDL(ctx context.Context, schema, table string) (string, error) {
+	var kind string
+	var viewDef stdsql.NullString
+	err := k.c.db.QueryRowContext(ctx, `
+		SELECT c.relkind::text, pg_get_viewdef(c.oid, true)
+		FROM pg_class c
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = $1 AND c.relname = $2`, schema, table).Scan(&kind, &viewDef)
+	qualified := k.c.d.Qualified(schema, table)
+	if err == nil && (kind == "v" || kind == "m") && viewDef.Valid {
+		def := strings.TrimSpace(viewDef.String)
+		if !strings.HasSuffix(def, ";") {
+			def += ";"
+		}
+		return fmt.Sprintf("CREATE VIEW %s AS\n%s", qualified, def), nil
+	}
+
+	columns, err := k.pgColumns(ctx, schema, table)
+	if err != nil {
+		return "", err
+	}
+	indexes, err := k.pgIndexes(ctx, schema, table)
+	if err != nil {
+		return "", err
+	}
+	fks, err := k.pgForeignKeys(ctx, schema, table)
+	if err != nil {
+		return "", err
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "CREATE TABLE %s (\n", qualified)
+	defs := make([]string, 0, len(columns)+1)
+	pkRaw := map[string]bool{}
+	for _, col := range columns {
+		def := "    " + k.c.d.Quote(col.Name) + " " + col.DataType
+		if !col.Nullable {
+			def += " NOT NULL"
+		}
+		if col.Default != "" {
+			def += " DEFAULT " + col.Default
+		}
+		defs = append(defs, def)
+		if col.PrimaryKey {
+			pkRaw[col.Name] = true
+		}
+	}
+	if len(pkRaw) > 0 {
+		pks := make([]string, 0, len(pkRaw))
+		for _, col := range columns {
+			if col.PrimaryKey {
+				pks = append(pks, k.c.d.Quote(col.Name))
+			}
+		}
+		defs = append(defs, "    PRIMARY KEY ("+strings.Join(pks, ", ")+")")
+	}
+	b.WriteString(strings.Join(defs, ",\n"))
+	b.WriteString("\n);\n")
+
+	for _, idx := range indexes {
+		if idx.Unique && len(idx.Columns) == len(pkRaw) {
+			allPK := true
+			for _, col := range idx.Columns {
+				if !pkRaw[col] {
+					allPK = false
+					break
+				}
+			}
+			if allPK {
+				continue
+			}
+		}
+		unique := ""
+		if idx.Unique {
+			unique = "UNIQUE "
+		}
+		cols := make([]string, len(idx.Columns))
+		for i, col := range idx.Columns {
+			cols[i] = k.c.d.Quote(col)
+		}
+		fmt.Fprintf(&b, "CREATE %sINDEX %s ON %s (%s);\n", unique, k.c.d.Quote(idx.Name), qualified, strings.Join(cols, ", "))
+	}
+	for _, fk := range fks {
+		fmt.Fprintf(&b, "ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s);\n",
+			qualified, k.c.d.Quote(fk.Name), k.c.d.Quote(fk.Column), k.c.d.Quote(fk.RefTable), k.c.d.Quote(fk.RefColumn))
+	}
+	return strings.TrimSpace(b.String()), nil
+}
+
 func (k catalog) mysqlSchemas(ctx context.Context) ([]string, error) {
 	rows, err := k.c.db.QueryContext(ctx, `
 		SELECT schema_name
@@ -341,6 +444,96 @@ func (k catalog) mysqlForeignKeys(ctx context.Context, schema, table string) ([]
 		out = append(out, fk)
 	}
 	return out, rows.Err()
+}
+
+func (k catalog) mysqlDDL(ctx context.Context, schema, table string) (string, error) {
+	qualified := k.c.d.Qualified(schema, table)
+	var lastErr error
+	for _, stmt := range []string{
+		"SHOW CREATE TABLE " + qualified,
+		"SHOW CREATE VIEW " + qualified,
+	} {
+		rows, err := k.c.db.QueryContext(ctx, stmt)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		columns, err := rows.Columns()
+		if err != nil {
+			rows.Close()
+			lastErr = err
+			continue
+		}
+		if rows.Next() {
+			values := make([]any, len(columns))
+			ptrs := make([]any, len(columns))
+			for i := range values {
+				ptrs[i] = &values[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				rows.Close()
+				return "", err
+			}
+			rows.Close()
+			if len(values) >= 2 {
+				switch v := values[1].(type) {
+				case []byte:
+					return string(v), nil
+				case string:
+					return v, nil
+				default:
+					return fmt.Sprint(v), nil
+				}
+			}
+		}
+		rows.Close()
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("no DDL found for %s", qualified)
+}
+
+func (k catalog) sqliteDDL(ctx context.Context, table string) (string, error) {
+	var ddl stdsql.NullString
+	err := k.c.db.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE name = ? AND type IN ('table', 'view')`, table).Scan(&ddl)
+	if err != nil {
+		return "", err
+	}
+	if !ddl.Valid {
+		return "", fmt.Errorf("no DDL found for %s", table)
+	}
+
+	var b strings.Builder
+	text := strings.TrimSpace(ddl.String)
+	if !strings.HasSuffix(text, ";") {
+		text += ";"
+	}
+	b.WriteString(text)
+
+	rows, err := k.c.db.QueryContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type = 'index' AND sql IS NOT NULL ORDER BY name`, table)
+	if err != nil {
+		return b.String(), nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var indexDDL string
+		if err := rows.Scan(&indexDDL); err != nil {
+			return b.String(), nil
+		}
+		b.WriteString("\n")
+		text := strings.TrimSpace(indexDDL)
+		if !strings.HasSuffix(text, ";") {
+			text += ";"
+		}
+		b.WriteString(text)
+	}
+	if err := rows.Err(); err != nil {
+		return b.String(), nil
+	}
+	return b.String(), nil
 }
 
 func (k catalog) sqliteTables(ctx context.Context) ([]db.Object, error) {

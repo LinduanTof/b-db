@@ -44,6 +44,7 @@ type Catalog interface {
 	Columns(ctx context.Context, schema, table string) ([]Column, error)
 	Indexes(ctx context.Context, schema, table string) ([]Index, error)
 	ForeignKeys(ctx context.Context, schema, table string) ([]ForeignKey, error)
+	DDL(ctx context.Context, schema, table string) (string, error)
 }
 
 type Querier interface {

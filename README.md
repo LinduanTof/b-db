@@ -59,7 +59,7 @@ connections:
 | 全局 | `Tab` / `Shift+Tab` | 切换面板 |
 | 全局 | `Ctrl+C` | 退出 |
 | 连接 | `↑` / `↓` | 移动光标 |
-| 连接 | `Enter` | 连接或展开节点 |
+| 连接 | `Enter` | 连接、展开节点或打开表操作菜单 |
 | 连接 | `→` / `←` | 展开 / 折叠 |
 | 连接 | `s` | 选中表并生成 `SELECT` |
 | 连接 | `d` | 查看表结构（列/索引/外键） |
@@ -109,6 +109,18 @@ connections:
 - 运行时添加的连接保存在 `$XDG_STATE_HOME/bdb/connections.yaml`（权限 `0600`），启动时与主配置合并；同名连接不会重复添加。
 - 字段会根据类型动态变化：SQLite 只需要名称与路径；MySQL 与 Navicat 一样不需要填写数据库名，连接后可浏览所有数据库，选中表时会生成 `db.table` 形式的查询。
 - 表单内容居中展示，label 固定宽度左对齐；当前字段以 `▸` 标记并在底部显示操作提示。
+
+## 表操作菜单
+
+在侧栏选中表后按 `Enter` 打开：
+
+- **View data**：生成 `SELECT *` 并立即执行
+- **View DDL**：查看建表语句（MySQL 使用 `SHOW CREATE TABLE`，SQLite 读取 `sqlite_master`，PostgreSQL 根据 catalog 生成）
+- **View structure**：列、索引、外键详情
+- **View indexes**：索引列表
+- **Generate SELECT**：只生成查询填入编辑器，不执行
+
+DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc` 或 `q` 关闭。
 
 ## SQL 自动补全
 

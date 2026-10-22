@@ -31,6 +31,7 @@ import (
 	"github.com/linduan/bdb/internal/ui/sidebar"
 	"github.com/linduan/bdb/internal/ui/statusbar"
 	"github.com/linduan/bdb/internal/ui/textutil"
+	"github.com/linduan/bdb/internal/ui/textview"
 	"github.com/linduan/bdb/internal/ui/theme"
 )
 
@@ -92,6 +93,18 @@ type completionColumnsMsg struct {
 	err     error
 }
 
+type ddlLoadedMsg struct {
+	title string
+	text  string
+	err   error
+}
+
+type indexesLoadedMsg struct {
+	title string
+	text  string
+	err   error
+}
+
 type Model struct {
 	cfg *config.Config
 	t   *i18n.Translator
@@ -101,9 +114,14 @@ type Model struct {
 	results    results.Model
 	statusbar  statusbar.Model
 	options    menu.Model
+	tableMenu  menu.Model
+	textView   textview.Model
 	detail     detail.Model
 	completion uicomplete.Model
 	connForm   connection.Model
+
+	tableMenuSchema string
+	tableMenuTable  string
 
 	completer    *ac.Engine
 	tableSchemas map[string]string
@@ -150,6 +168,8 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.editor = editor.New(t)
 	m.results = results.New(t)
 	m.options = menu.New(t)
+	m.tableMenu = menu.New(t)
+	m.textView = textview.New(t)
 	m.detail = detail.New(t)
 	m.completion = uicomplete.New(t)
 	m.connForm = connection.New(t)
@@ -176,6 +196,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.options.SetSize(msg.Width, msg.Height)
+		m.tableMenu.SetSize(msg.Width, msg.Height)
+		m.textView.SetSize(msg.Width, msg.Height)
 		m.detail.SetSize(msg.Width, msg.Height)
 		m.completion.SetSize(msg.Width, msg.Height)
 		m.connForm.SetSize(msg.Width, msg.Height)
@@ -184,9 +206,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
 	case menu.ActionMsg:
+		if strings.HasPrefix(msg.ID, "table.") {
+			return m, m.runTableMenuAction(msg)
+		}
 		return m, m.runMenuAction(msg)
 	case menu.ChangedMsg:
 		m.applyMenuChange(msg)
+		return m, nil
+	case sidebar.TableMenuMsg:
+		m.tableMenuSchema, m.tableMenuTable = msg.Schema, msg.Table
+		m.tableMenu.Open(qualifiedTable(msg.Schema, msg.Table), m.tableMenuItems())
+		return m, nil
+	case ddlLoadedMsg:
+		if msg.err != nil {
+			m.textView.Open(msg.title, m.t.T(i18n.KeyErrorDDL, msg.err))
+		} else {
+			m.textView.Open(msg.title, msg.text)
+		}
+		return m, nil
+	case indexesLoadedMsg:
+		if msg.err != nil {
+			m.textView.Open(msg.title, m.t.T(i18n.KeyErrorIndexes, msg.err))
+		} else {
+			m.textView.Open(msg.title, msg.text)
+		}
 		return m, nil
 	case detailLoadedMsg:
 		if m.detail.IsOpen() && m.detail.Title() == msg.title {
@@ -288,6 +331,20 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.options, cmd = m.options.Update(msg)
 		return cmd
 	}
+	if m.tableMenu.IsOpen() {
+		if key == "q" {
+			m.shutdown()
+			return tea.Quit
+		}
+		var cmd tea.Cmd
+		m.tableMenu, cmd = m.tableMenu.Update(msg)
+		return cmd
+	}
+	if m.textView.IsOpen() {
+		var cmd tea.Cmd
+		m.textView, cmd = m.textView.Update(msg)
+		return cmd
+	}
 	if m.detail.IsOpen() {
 		var cmd tea.Cmd
 		m.detail, cmd = m.detail.Update(msg)
@@ -318,7 +375,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		m.completion.Close()
-		m.options.Open(m.menuItems())
+		m.options.Open("", m.menuItems())
 		return nil
 	}
 	if key == "q" && m.focus != focusEditor {
@@ -545,13 +602,99 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 }
 
 func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
-	name := msg.Table
-	if msg.Schema != "" && msg.Schema != "main" {
-		name = msg.Schema + "." + msg.Table
-	}
-	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), name))
+	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(msg.Schema, msg.Table)))
 	m.focus = focusEditor
 	return m.editor.Focus()
+}
+
+func qualifiedTable(schema, table string) string {
+	if schema != "" && schema != "main" {
+		return schema + "." + table
+	}
+	return table
+}
+
+func (m *Model) tableData(schema, table string) tea.Cmd {
+	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(schema, table)))
+	m.focus = focusEditor
+	focus := m.editor.Focus()
+	run := m.runQuery()
+	return tea.Batch(focus, run)
+}
+
+func (m *Model) tableMenuItems() []menu.Item {
+	return []menu.Item{
+		{ID: "table.data", LabelKey: i18n.KeyTableData, Kind: menu.KindAction},
+		{ID: "table.ddl", LabelKey: i18n.KeyTableDDL, Kind: menu.KindAction},
+		{ID: "table.structure", LabelKey: i18n.KeyTableStructure, Kind: menu.KindAction},
+		{ID: "table.indexes", LabelKey: i18n.KeyTableIndexes, Kind: menu.KindAction},
+		{ID: "table.select", LabelKey: i18n.KeyTableSelect, Kind: menu.KindAction},
+	}
+}
+
+func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
+	schema, table := m.tableMenuSchema, m.tableMenuTable
+	switch msg.ID {
+	case "table.data":
+		return m.tableData(schema, table)
+	case "table.select":
+		return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table})
+	case "table.structure":
+		return m.openDetail(schema, table)
+	case "table.ddl":
+		return m.openDDL(schema, table)
+	case "table.indexes":
+		return m.openIndexes(schema, table)
+	}
+	return nil
+}
+
+func (m *Model) openDDL(schema, table string) tea.Cmd {
+	conn := m.conn
+	if conn == nil {
+		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
+		return nil
+	}
+	title := fmt.Sprintf(m.t.T(i18n.KeyTableDDLTitle), qualifiedTable(schema, table))
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ddl, err := conn.Catalog().DDL(ctx, schema, table)
+		return ddlLoadedMsg{title: title, text: ddl, err: err}
+	}
+}
+
+func (m *Model) openIndexes(schema, table string) tea.Cmd {
+	conn := m.conn
+	if conn == nil {
+		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
+		return nil
+	}
+	title := fmt.Sprintf(m.t.T(i18n.KeyTableIndexesTitle), qualifiedTable(schema, table))
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		indexes, err := conn.Catalog().Indexes(ctx, schema, table)
+		if err != nil {
+			return indexesLoadedMsg{title: title, err: err}
+		}
+		return indexesLoadedMsg{title: title, text: formatIndexes(indexes)}
+	}
+}
+
+func formatIndexes(indexes []db.Index) string {
+	if len(indexes) == 0 {
+		return "(none)"
+	}
+	lines := make([]string, 0, len(indexes))
+	for _, idx := range indexes {
+		unique := ""
+		if idx.Unique {
+			unique = " UNIQUE"
+		}
+		lines = append(lines, fmt.Sprintf("%s%s (%s)", idx.Name, unique, strings.Join(idx.Columns, ", ")))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) exportCmd(kind string) tea.Cmd {
@@ -638,6 +781,12 @@ func (m *Model) render() string {
 	base := m.renderMain()
 	if m.options.IsOpen() {
 		return textutil.Overlay(base, m.options.View(), m.width, m.height)
+	}
+	if m.tableMenu.IsOpen() {
+		return textutil.Overlay(base, m.tableMenu.View(), m.width, m.height)
+	}
+	if m.textView.IsOpen() {
+		return m.textView.View()
 	}
 	if m.connForm.IsOpen() {
 		return textutil.Overlay(base, m.connForm.View(), m.width, m.height)
