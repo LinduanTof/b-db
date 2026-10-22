@@ -538,6 +538,55 @@ func TestTableIndexesAction(t *testing.T) {
 	}
 }
 
+func TestMouseClickSidebar(t *testing.T) {
+	m := testModel(t, "en")
+	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 1, Button: tea.MouseLeft})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.conn == nil {
+		t.Fatalf("click should connect, status=%s", m.status)
+	}
+	defer m.conn.Close()
+	if m.focus != focusSidebar {
+		t.Fatalf("focus = %v, want sidebar", m.focus)
+	}
+}
+
+func TestMouseClickResults(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m.editor.SetValue("SELECT id, name FROM users ORDER BY id;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+
+	x := m.sideW + 1 + 7
+	y := m.editorH + 2 + 3
+	model, _ = m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
+	}
+	row, col := m.results.CursorPosition()
+	if row != 0 || col != 0 {
+		t.Fatalf("cursor = %d,%d, want 0,0", row, col)
+	}
+	if got := m.results.CursorCell(); got != "1" {
+		t.Fatalf("cell = %q, want 1", got)
+	}
+
+	model, _ = m.Update(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown})
+	m = model.(*Model)
+	if row, _ := m.results.CursorPosition(); row != 3 {
+		t.Fatalf("wheel row = %d, want 3", row)
+	}
+}
+
 func TestMenuSettings(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})

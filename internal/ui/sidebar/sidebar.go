@@ -241,19 +241,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.rebuild()
 		}
 	case "enter":
-		n := m.selected()
-		if n == nil {
-			return nil
-		}
-		if n.Kind == KindConnection && n.ConnName != m.connName {
-			name := n.ConnName
-			return func() tea.Msg { return ConnectMsg{Name: name} }
-		}
-		if n.Kind == KindTable {
-			schema, table := n.Schema, n.Table
-			return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table} }
-		}
-		return m.toggle(n)
+		return m.activate()
 	case "s":
 		n := m.selected()
 		if n != nil && n.Kind == KindTable {
@@ -267,6 +255,38 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (m *Model) activate() tea.Cmd {
+	n := m.selected()
+	if n == nil {
+		return nil
+	}
+	if n.Kind == KindConnection && n.ConnName != m.connName {
+		name := n.ConnName
+		return func() tea.Msg { return ConnectMsg{Name: name} }
+	}
+	if n.Kind == KindTable {
+		schema, table := n.Schema, n.Table
+		return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table} }
+	}
+	return m.toggle(n)
+}
+
+func (m *Model) HandleClick(row int) tea.Cmd {
+	if row < 0 {
+		return nil
+	}
+	index := m.offset + row
+	if index < 0 || index >= len(m.flat) {
+		return nil
+	}
+	m.cursor = index
+	return m.activate()
+}
+
+func (m *Model) Scroll(delta int) {
+	m.move(delta)
 }
 
 func (m *Model) selected() *Node {

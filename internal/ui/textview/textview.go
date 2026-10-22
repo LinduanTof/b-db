@@ -39,6 +39,13 @@ func (m *Model) Close() { m.open = false }
 
 func (m Model) IsOpen() bool { return m.open }
 
+func (m *Model) Scroll(delta int) {
+	m.scroll += delta * 3
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+}
+
 func (m *Model) Update(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q":

@@ -205,6 +205,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
+	case tea.MouseClickMsg:
+		return m, m.handleMouseClick(msg)
+	case tea.MouseWheelMsg:
+		return m, m.handleMouseWheel(msg)
 	case menu.ActionMsg:
 		if strings.HasPrefix(msg.ID, "table.") {
 			return m, m.runTableMenuAction(msg)
@@ -305,6 +309,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "bdb"
 	// Lets terminals that support the Kitty keyboard protocol distinguish
 	// ctrl+enter from plain enter.
@@ -314,6 +319,84 @@ func (m *Model) View() tea.View {
 		ReportAssociatedText:       true,
 	}
 	return v
+}
+
+func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
+	if msg.Button != tea.MouseLeft || m.anyOverlayOpen() {
+		return nil
+	}
+	x, y := msg.X, msg.Y
+	if x < m.sideW {
+		if y < 0 || y >= m.height-2 {
+			return nil
+		}
+		m.editor.Blur()
+		m.focus = focusSidebar
+		if y == 0 {
+			return nil
+		}
+		return m.sidebar.HandleClick(y - 1)
+	}
+
+	editorStart := m.sideW + 1
+	if x < editorStart || x >= editorStart+m.rightW {
+		return nil
+	}
+	relX := x - editorStart
+	switch {
+	case y >= 0 && y < m.editorH:
+		m.focus = focusEditor
+		return m.editor.Focus()
+	case y >= m.editorH+1 && y < m.editorH+1+m.resultsH:
+		m.editor.Blur()
+		m.focus = focusResults
+		relY := y - (m.editorH + 2)
+		if relY >= 0 {
+			m.results.HandleClick(relX, relY)
+		}
+	}
+	return nil
+}
+
+func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	delta := 0
+	switch msg.Button {
+	case tea.MouseWheelUp:
+		delta = -1
+	case tea.MouseWheelDown:
+		delta = 1
+	default:
+		return nil
+	}
+
+	if m.textView.IsOpen() {
+		m.textView.Scroll(delta)
+		return nil
+	}
+	if m.detail.IsOpen() {
+		m.detail.Scroll(delta)
+		return nil
+	}
+	if m.anyOverlayOpen() {
+		return nil
+	}
+
+	x, y := msg.X, msg.Y
+	if x < m.sideW && y >= 0 && y < m.height-2 {
+		m.sidebar.Scroll(delta)
+		return nil
+	}
+	editorStart := m.sideW + 1
+	if x >= editorStart && x < editorStart+m.rightW &&
+		y >= m.editorH+2 && y < m.editorH+1+m.resultsH {
+		m.results.Scroll(delta)
+	}
+	return nil
+}
+
+func (m *Model) anyOverlayOpen() bool {
+	return m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
+		m.detail.IsOpen() || m.connForm.IsOpen() || m.completion.IsOpen() || m.showHelp
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {

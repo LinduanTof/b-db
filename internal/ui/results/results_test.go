@@ -153,6 +153,44 @@ func sameOrder(got, want []int) bool {
 	return true
 }
 
+func TestHandleClick(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 12)
+	m.SetResult(sample(10))
+
+	if !m.HandleClick(7, 3) {
+		t.Fatal("click on a data cell should be handled")
+	}
+	row, col := m.CursorPosition()
+	if row != 0 || col != 0 {
+		t.Fatalf("cursor = %d,%d, want 0,0", row, col)
+	}
+	if !m.HandleClick(2, 4) {
+		t.Fatal("click on the row number should be handled")
+	}
+	row, _ = m.CursorPosition()
+	if row != 1 {
+		t.Fatalf("row = %d, want 1", row)
+	}
+	if m.HandleClick(7, 1) {
+		t.Fatal("header click should not select a cell")
+	}
+}
+
+func TestScroll(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 12)
+	m.SetResult(sample(20))
+	m.Scroll(1)
+	if row, _ := m.CursorPosition(); row != 3 {
+		t.Fatalf("row = %d, want 3", row)
+	}
+	m.Scroll(-1)
+	if row, _ := m.CursorPosition(); row != 0 {
+		t.Fatalf("row = %d, want 0", row)
+	}
+}
+
 func TestBorders(t *testing.T) {
 	m := New(i18n.New("en"))
 	m.SetSize(60, 12)

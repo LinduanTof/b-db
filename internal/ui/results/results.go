@@ -302,6 +302,39 @@ func (m Model) CursorCell() string {
 	return m.cells[row][m.cursorCol]
 }
 
+func (m Model) CursorPosition() (row, col int) { return m.cursorRow, m.cursorCol }
+
+func (m *Model) HandleClick(x, y int) bool {
+	if y < 3 || len(m.cells) == 0 {
+		return false
+	}
+	row := m.scrollRow + (y - 3)
+	if row < 0 || row >= len(m.cells) {
+		return false
+	}
+	if x >= 1 && x < 1+rowNumWidth {
+		m.cursorRow = row
+		m.ensureVisible()
+		return true
+	}
+	cursorX := 1 + rowNumWidth + 1
+	for _, col := range m.columnLayout() {
+		if x >= cursorX && x < cursorX+col.width {
+			m.cursorCol = col.index
+			m.cursorRow = row
+			m.ensureVisible()
+			return true
+		}
+		cursorX += col.width + 1
+	}
+	return false
+}
+
+func (m *Model) Scroll(delta int) {
+	m.moveRow(delta * 3)
+	m.ensureVisible()
+}
+
 func (m *Model) ensureVisible() {
 	if len(m.widths) > 0 {
 		if m.cursorCol < m.scrollCol {
