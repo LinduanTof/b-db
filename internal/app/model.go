@@ -22,7 +22,9 @@ import (
 	"github.com/linduan-guan/b-db/internal/i18n"
 	"github.com/linduan-guan/b-db/internal/query"
 	"github.com/linduan-guan/b-db/internal/sqlscript"
+	"github.com/linduan-guan/b-db/internal/ui/celledit"
 	uicomplete "github.com/linduan-guan/b-db/internal/ui/complete"
+	"github.com/linduan-guan/b-db/internal/ui/confirm"
 	"github.com/linduan-guan/b-db/internal/ui/connection"
 	"github.com/linduan-guan/b-db/internal/ui/detail"
 	"github.com/linduan-guan/b-db/internal/ui/editor"
@@ -52,6 +54,33 @@ type connOpenedMsg struct {
 type queryDoneMsg struct {
 	id      uint64
 	outcome query.Outcome
+}
+
+type editInfo struct {
+	columns []db.Column
+	primary []string
+}
+
+type editTarget struct {
+	table    db.TableRef
+	column   string
+	dataType string
+	key      map[string]any
+}
+
+type editInfoMsg struct {
+	schema  string
+	table   string
+	action  string
+	columns []db.Column
+	primary []string
+	err     error
+}
+
+type mutationDoneMsg struct {
+	kind     string
+	affected int64
+	err      error
 }
 
 type exportedMsg struct {
@@ -119,6 +148,13 @@ type Model struct {
 	detail     detail.Model
 	completion uicomplete.Model
 	connForm   connection.Model
+	cellEdit   celledit.Model
+	confirm    confirm.Model
+
+	pendingCmd    tea.Cmd
+	pendingSource *db.TableRef
+	editCache     map[string]editInfo
+	editTarget    editTarget
 
 	tableMenuSchema string
 	tableMenuTable  string
@@ -181,6 +217,9 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.detail = detail.New(t)
 	m.completion = uicomplete.New(t)
 	m.connForm = connection.New(t)
+	m.cellEdit = celledit.New(t)
+	m.confirm = confirm.New(t)
+	m.editCache = map[string]editInfo{}
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
 	if wd, err := os.Getwd(); err == nil {
@@ -209,6 +248,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.SetSize(msg.Width, msg.Height)
 		m.completion.SetSize(msg.Width, msg.Height)
 		m.connForm.SetSize(msg.Width, msg.Height)
+		m.cellEdit.SetSize(msg.Width, msg.Height)
+		m.confirm.SetSize(msg.Width, msg.Height)
 		m.layout()
 		return m, nil
 	case tea.KeyPressMsg:
@@ -289,6 +330,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case queryDoneMsg:
 		m.handleQueryDone(msg)
 		return m, nil
+	case celledit.SubmittedMsg:
+		return m, m.openUpdateConfirm(msg.Value)
+	case confirm.ConfirmedMsg:
+		cmd := m.pendingCmd
+		m.pendingCmd = nil
+		m.confirm.Close()
+		return m, cmd
+	case editInfoMsg:
+		return m, m.handleEditInfo(msg)
+	case mutationDoneMsg:
+		return m, m.handleMutationDone(msg)
 	case exportedMsg:
 		if msg.err != nil {
 			m.setStatus(m.t.T(i18n.KeyErrorExport, msg.err), true)
@@ -473,6 +525,16 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.connForm, cmd = m.connForm.Update(msg)
 		return cmd
 	}
+	if m.cellEdit.IsOpen() {
+		var cmd tea.Cmd
+		m.cellEdit, cmd = m.cellEdit.Update(msg)
+		return cmd
+	}
+	if m.confirm.IsOpen() {
+		var cmd tea.Cmd
+		m.confirm, cmd = m.confirm.Update(msg)
+		return cmd
+	}
 	if m.showHelp {
 		switch key {
 		case "?", "esc":
@@ -575,6 +637,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			title := fmt.Sprintf(m.t.T(i18n.KeyCellTitle), m.results.CursorColumnName())
 			m.textView.Open(title, text)
 			return nil
+		case "e":
+			return m.beginCellEdit()
+		case "x", "delete":
+			return m.beginDeleteRow()
 		case "c":
 			text := m.results.CursorCell()
 			if text == "" {
@@ -656,6 +722,8 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	m.conn = msg.conn
 	m.connName = msg.name
 	m.executor = query.Executor{Conn: m.conn, MaxRows: m.cfg.Query.MaxRows}
+	m.editCache = map[string]editInfo{}
+	m.editTarget = editTarget{}
 	m.setStatus(m.t.T(i18n.KeyStatusConnected, msg.name), false)
 	m.completer.Reset()
 	m.tableSchemas = map[string]string{}
@@ -717,6 +785,9 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 	if msg.id != m.querySeq {
 		return
 	}
+	defer func() {
+		m.pendingSource = nil
+	}()
 	m.running = false
 	if m.cancel != nil {
 		m.cancel()
@@ -740,6 +811,9 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 	switch {
 	case out.Result != nil:
 		m.results.SetResult(out.Result)
+		if m.pendingSource != nil {
+			m.results.SetSource(m.pendingSource.Schema, m.pendingSource.Name)
+		}
 		duration := humanDuration(out.Result.Elapsed)
 		if out.Result.Truncated {
 			m.setStatus(m.t.T(i18n.KeyStatusRowsTruncated, len(out.Result.Rows), duration), false)
@@ -770,6 +844,7 @@ func (m *Model) tableData(schema, table string) tea.Cmd {
 	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(schema, table)))
 	m.focus = focusEditor
 	m.layout()
+	m.pendingSource = &db.TableRef{Schema: schema, Name: table}
 	focus := m.editor.Focus()
 	run := m.runQuery()
 	return tea.Batch(focus, run)
@@ -782,6 +857,7 @@ func (m *Model) tableMenuItems() []menu.Item {
 		{ID: "table.structure", LabelKey: i18n.KeyTableStructure, Kind: menu.KindAction},
 		{ID: "table.indexes", LabelKey: i18n.KeyTableIndexes, Kind: menu.KindAction},
 		{ID: "table.select", LabelKey: i18n.KeyTableSelect, Kind: menu.KindAction},
+		{ID: "table.insert", LabelKey: i18n.KeyMenuInsert, Kind: menu.KindAction},
 	}
 }
 
@@ -798,6 +874,8 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 		return m.openDDL(schema, table)
 	case "table.indexes":
 		return m.openIndexes(schema, table)
+	case "table.insert":
+		return m.editInfoCmd(schema, table, "insert")
 	}
 	return nil
 }
@@ -961,6 +1039,12 @@ func (m *Model) render() string {
 	}
 	if m.textView.IsOpen() {
 		return m.textView.View()
+	}
+	if m.cellEdit.IsOpen() {
+		return textutil.Overlay(base, m.cellEdit.View(), m.width, m.height)
+	}
+	if m.confirm.IsOpen() {
+		return textutil.Overlay(base, m.confirm.View(), m.width, m.height)
 	}
 	if m.connForm.IsOpen() {
 		return textutil.Overlay(base, m.connForm.View(), m.width, m.height)
@@ -1197,6 +1281,229 @@ func maxRowLabels() []string {
 		out[i] = strconv.Itoa(v)
 	}
 	return out
+}
+
+func (m *Model) readOnly() bool {
+	c := m.cfg.Find(m.connName)
+	return c != nil && c.ReadOnly
+}
+
+func editInfoKey(schema, table string) string {
+	return schema + "." + table
+}
+
+func (m *Model) editInfoCmd(schema, table, action string) tea.Cmd {
+	if info, ok := m.editCache[editInfoKey(schema, table)]; ok {
+		return m.useEditInfo(schema, table, action, info)
+	}
+	conn := m.conn
+	if conn == nil {
+		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		columns, err := conn.Catalog().Columns(ctx, schema, table)
+		if err != nil {
+			return editInfoMsg{schema: schema, table: table, action: action, err: err}
+		}
+		primary := make([]string, 0, len(columns))
+		for _, column := range columns {
+			if column.PrimaryKey {
+				primary = append(primary, column.Name)
+			}
+		}
+		return editInfoMsg{schema: schema, table: table, action: action, columns: columns, primary: primary}
+	}
+}
+
+func (m *Model) handleEditInfo(msg editInfoMsg) tea.Cmd {
+	if msg.err != nil {
+		m.setStatus(m.t.T(i18n.KeyErrorEdit, msg.err), true)
+		return nil
+	}
+	info := editInfo{columns: msg.columns, primary: msg.primary}
+	m.editCache[editInfoKey(msg.schema, msg.table)] = info
+	return m.useEditInfo(msg.schema, msg.table, msg.action, info)
+}
+
+func (m *Model) useEditInfo(schema, table, action string, info editInfo) tea.Cmd {
+	switch action {
+	case "insert":
+		return m.insertTemplate(schema, table, info.columns)
+	case "delete":
+		m.openDeleteConfirm(schema, table, info)
+	default:
+		m.openCellEditor(schema, table, info)
+	}
+	return nil
+}
+
+func (m *Model) beginCellEdit() tea.Cmd {
+	schema, table, ok := m.results.Source()
+	if !ok {
+		m.setStatus(m.t.T(i18n.KeyErrorEditSource), true)
+		return nil
+	}
+	if m.readOnly() {
+		m.setStatus(m.t.T(i18n.KeyErrorReadOnly), true)
+		return nil
+	}
+	return m.editInfoCmd(schema, table, "edit")
+}
+
+func (m *Model) beginDeleteRow() tea.Cmd {
+	schema, table, ok := m.results.Source()
+	if !ok {
+		m.setStatus(m.t.T(i18n.KeyErrorEditSource), true)
+		return nil
+	}
+	if m.readOnly() {
+		m.setStatus(m.t.T(i18n.KeyErrorReadOnly), true)
+		return nil
+	}
+	return m.editInfoCmd(schema, table, "delete")
+}
+
+func (m *Model) openCellEditor(schema, table string, info editInfo) {
+	if len(info.primary) == 0 {
+		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
+		return
+	}
+	key, ok := m.results.RowKey(info.primary)
+	if !ok {
+		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
+		return
+	}
+	column := m.results.CursorColumnName()
+	if column == "" {
+		return
+	}
+	dataType := ""
+	for _, c := range info.columns {
+		if c.Name == column {
+			dataType = c.DataType
+			break
+		}
+	}
+	m.editTarget = editTarget{
+		table:    db.TableRef{Schema: schema, Name: table},
+		column:   column,
+		dataType: dataType,
+		key:      key,
+	}
+	title := fmt.Sprintf(m.t.T(i18n.KeyCellEditTitle), qualifiedTable(schema, table)+"."+column)
+	m.cellEdit.Open(title, m.results.CursorCell())
+}
+
+func (m *Model) openDeleteConfirm(schema, table string, info editInfo) {
+	if len(info.primary) == 0 {
+		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
+		return
+	}
+	key, ok := m.results.RowKey(info.primary)
+	if !ok {
+		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
+		return
+	}
+	mut := m.conn.Mutator()
+	if mut == nil {
+		m.setStatus(m.t.T(i18n.KeyErrorMutation, "mutations are not supported"), true)
+		return
+	}
+	tableRef := db.TableRef{Schema: schema, Name: table}
+	m.pendingCmd = m.mutationCmd("delete", func(ctx context.Context, mut db.Mutator) (int64, error) {
+		return mut.DeleteRow(ctx, tableRef, key)
+	})
+	m.confirm.Open(m.t.T(i18n.KeyConfirmDelete), mut.PreviewDelete(tableRef, key))
+}
+
+func (m *Model) openUpdateConfirm(raw string) tea.Cmd {
+	target := m.editTarget
+	if target.column == "" || m.conn == nil {
+		return nil
+	}
+	mut := m.conn.Mutator()
+	if mut == nil {
+		m.setStatus(m.t.T(i18n.KeyErrorMutation, "mutations are not supported"), true)
+		return nil
+	}
+	value := parseCellValue(raw, target.dataType)
+	m.pendingCmd = m.mutationCmd("update", func(ctx context.Context, mut db.Mutator) (int64, error) {
+		return mut.UpdateCell(ctx, target.table, target.key, target.column, value)
+	})
+	m.confirm.Open(m.t.T(i18n.KeyConfirmUpdate), mut.PreviewUpdate(target.table, target.key, target.column, value))
+	return nil
+}
+
+func (m *Model) mutationCmd(kind string, run func(context.Context, db.Mutator) (int64, error)) tea.Cmd {
+	mut := m.conn.Mutator()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		affected, err := run(ctx, mut)
+		return mutationDoneMsg{kind: kind, affected: affected, err: err}
+	}
+}
+
+func (m *Model) handleMutationDone(msg mutationDoneMsg) tea.Cmd {
+	if msg.err != nil {
+		m.setStatus(m.t.T(i18n.KeyErrorMutation, msg.err), true)
+		return nil
+	}
+	if msg.kind == "delete" {
+		m.setStatus(m.t.T(i18n.KeyStatusDeleted), false)
+	} else {
+		m.setStatus(m.t.T(i18n.KeyStatusUpdated), false)
+	}
+	return m.refreshSource()
+}
+
+func (m *Model) refreshSource() tea.Cmd {
+	schema, table, ok := m.results.Source()
+	if !ok {
+		return nil
+	}
+	stmt := fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(schema, table))
+	m.editor.SetValue(stmt)
+	m.pendingSource = &db.TableRef{Schema: schema, Name: table}
+	return m.runQuery()
+}
+
+func (m *Model) insertTemplate(schema, table string, columns []db.Column) tea.Cmd {
+	names := make([]string, 0, len(columns))
+	values := make([]string, 0, len(columns))
+	for _, column := range columns {
+		names = append(names, column.Name)
+		values = append(values, "NULL")
+	}
+	stmt := fmt.Sprintf(m.t.T(i18n.KeyQueryInsertTemplate), qualifiedTable(schema, table), strings.Join(names, ", "), strings.Join(values, ", "))
+	m.editor.SetValue(stmt)
+	m.focus = focusEditor
+	m.layout()
+	return m.editor.Focus()
+}
+
+func parseCellValue(raw, dataType string) any {
+	trimmed := strings.TrimSpace(raw)
+	kind := strings.ToLower(dataType)
+	switch {
+	case strings.Contains(kind, "int"), strings.Contains(kind, "serial"):
+		if value, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+			return value
+		}
+	case strings.Contains(kind, "numeric"), strings.Contains(kind, "decimal"),
+		strings.Contains(kind, "real"), strings.Contains(kind, "double"), strings.Contains(kind, "float"):
+		if value, err := strconv.ParseFloat(trimmed, 64); err == nil {
+			return value
+		}
+	case strings.Contains(kind, "bool"):
+		if value, err := strconv.ParseBool(trimmed); err == nil {
+			return value
+		}
+	}
+	return raw
 }
 
 func (m *Model) openDetail(schema, table string) tea.Cmd {

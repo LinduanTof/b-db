@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,9 @@ import (
 	"github.com/linduan-guan/b-db/internal/config"
 	"github.com/linduan-guan/b-db/internal/history"
 	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/linduan-guan/b-db/internal/ui/celledit"
 	uicomplete "github.com/linduan-guan/b-db/internal/ui/complete"
+	"github.com/linduan-guan/b-db/internal/ui/confirm"
 	"github.com/linduan-guan/b-db/internal/ui/connection"
 	"github.com/linduan-guan/b-db/internal/ui/menu"
 	"github.com/linduan-guan/b-db/internal/ui/sidebar"
@@ -27,8 +30,16 @@ func testModel(t *testing.T, lang string) *Model {
 func testModelWithFocus(t *testing.T, lang, focusMode string) *Model {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	dbPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "demo.db"))
+	srcPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "demo.db"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "demo.db")
+	if err := os.WriteFile(dbPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{
@@ -61,6 +72,7 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 		switch msg.(type) {
 		case connOpenedMsg, queryDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
+			editInfoMsg, mutationDoneMsg, celledit.SubmittedMsg, confirm.ConfirmedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
 			sidebar.ConnectMsg, sidebar.SelectTableMsg, sidebar.TableMenuMsg,
 			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg:
@@ -736,6 +748,118 @@ func TestViewFullCell(t *testing.T) {
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.textView.IsOpen() {
 		t.Fatal("esc should close the cell viewer")
+	}
+}
+
+func TestCellEditFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	if _, _, ok := m.results.Source(); !ok {
+		t.Fatalf("table data should be editable, status=%s", m.status)
+	}
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "e"})
+	if !m.cellEdit.IsOpen() {
+		t.Fatalf("cell editor should open, status=%s", m.status)
+	}
+	m.cellEdit.SetValue("AliceEdited")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.confirm.IsOpen() {
+		t.Fatal("confirm dialog should open after editing")
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "y"})
+
+	rs, err := m.conn.Querier().Query(context.Background(), "SELECT name FROM users WHERE id = 1;", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Rows) != 1 || rs.Rows[0][0] != "AliceEdited" {
+		t.Fatalf("query result = %#v", rs.Rows)
+	}
+	if m.results.Result() == nil {
+		t.Fatal("results should refresh after update")
+	}
+}
+
+func TestDeleteRowFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "x"})
+	if !m.confirm.IsOpen() {
+		t.Fatalf("delete confirm should open, status=%s", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "y"})
+
+	rs, err := m.conn.Querier().Query(context.Background(), "SELECT COUNT(*) FROM users;", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.Rows[0][0] != int64(4) {
+		t.Fatalf("remaining rows = %#v, want 4", rs.Rows[0][0])
+	}
+}
+
+func TestCellEditRejectsReadOnlyOrCustomQuery(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "e"})
+	if m.cellEdit.IsOpen() {
+		t.Fatal("editing should not open for a custom query")
+	}
+	if !strings.Contains(m.status, "table data") {
+		t.Fatalf("status = %q", m.status)
+	}
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.cfg.Connections[0].ReadOnly = true
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "e"})
+	if m.cellEdit.IsOpen() {
+		t.Fatal("editing should not open for a read-only connection")
+	}
+	if !strings.Contains(m.status, "read-only") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestInsertTemplate(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "insert"))
+	if !strings.Contains(m.editor.Value(), "INSERT INTO users") {
+		t.Fatalf("editor = %q", m.editor.Value())
+	}
+	if !strings.Contains(m.editor.Value(), "VALUES") {
+		t.Fatalf("editor = %q", m.editor.Value())
 	}
 }
 

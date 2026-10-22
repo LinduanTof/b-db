@@ -38,6 +38,9 @@ type Model struct {
 	cursorRow, cursorCol int
 	scrollRow, scrollCol int
 
+	sourceSchema string
+	sourceTable  string
+
 	order   []int
 	sortCol int
 	sortAsc bool
@@ -53,6 +56,7 @@ func (m *Model) SetSize(width, height int) {
 
 func (m *Model) SetResult(rs *db.ResultSet) {
 	m.rs = rs
+	m.sourceSchema, m.sourceTable = "", ""
 	m.errText = ""
 	m.affected = nil
 	m.elapsed = rs.Elapsed
@@ -317,6 +321,48 @@ func (m Model) CursorCell() string {
 }
 
 func (m Model) CursorPosition() (row, col int) { return m.cursorRow, m.cursorCol }
+
+func (m *Model) SetSource(schema, table string) {
+	m.sourceSchema, m.sourceTable = schema, table
+}
+
+func (m Model) Source() (schema, table string, ok bool) {
+	if m.sourceTable == "" {
+		return "", "", false
+	}
+	return m.sourceSchema, m.sourceTable, true
+}
+
+func (m Model) RowKey(columns []string) (map[string]any, bool) {
+	if m.rs == nil || len(m.cells) == 0 || len(columns) == 0 {
+		return nil, false
+	}
+	row := m.cursorRow
+	if row < 0 || row >= len(m.cells) {
+		return nil, false
+	}
+	if row < len(m.order) {
+		row = m.order[row]
+	}
+	if row >= len(m.rs.Rows) {
+		return nil, false
+	}
+	key := make(map[string]any, len(columns))
+	for _, name := range columns {
+		index := -1
+		for i, column := range m.rs.Columns {
+			if column.Name == name {
+				index = i
+				break
+			}
+		}
+		if index < 0 || index >= len(m.rs.Rows[row]) {
+			return nil, false
+		}
+		key[name] = m.rs.Rows[row][index]
+	}
+	return key, true
+}
 
 func (m Model) CursorColumnName() string {
 	if m.rs == nil || m.cursorCol < 0 || m.cursorCol >= len(m.rs.Columns) {

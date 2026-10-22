@@ -79,6 +79,7 @@ type Connection struct {
 	Addr     string `yaml:"addr"`
 	DB       int    `yaml:"db"`
 	URI      string `yaml:"uri"`
+	ReadOnly bool   `yaml:"read_only"`
 }
 
 func Defaults() Config {

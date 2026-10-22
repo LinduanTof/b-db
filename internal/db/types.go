@@ -36,6 +36,19 @@ type Conn interface {
 	Capabilities() Capability
 	Catalog() Catalog
 	Querier() Querier
+	Mutator() Mutator
+}
+
+type TableRef struct {
+	Schema string
+	Name   string
+}
+
+type Mutator interface {
+	UpdateCell(ctx context.Context, table TableRef, key map[string]any, column string, value any) (int64, error)
+	DeleteRow(ctx context.Context, table TableRef, key map[string]any) (int64, error)
+	PreviewUpdate(table TableRef, key map[string]any, column string, value any) string
+	PreviewDelete(table TableRef, key map[string]any) string
 }
 
 type Catalog interface {

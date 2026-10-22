@@ -134,3 +134,5 @@ func (c *conn) Capabilities() db.Capability { return db.CapQuery | db.CapCatalog
 func (c *conn) Catalog() db.Catalog { return catalog{c: c} }
 
 func (c *conn) Querier() db.Querier { return querier{c: c} }
+
+func (c *conn) Mutator() db.Mutator { return mutator{c: c} }
