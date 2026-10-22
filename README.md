@@ -166,6 +166,11 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 ## 开发
 
+分支策略：
+
+- `main` 只接受合并，不直接提交
+- 日常开发在 `dev` 分支进行
+
 ```bash
 make test        # 生成 demo.db 并运行全部测试
 make vet
