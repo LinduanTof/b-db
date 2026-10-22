@@ -180,6 +180,7 @@ type Model struct {
 
 	conn     db.Conn
 	connName string
+	sessions map[string]*session
 	executor query.Executor
 
 	querySeq uint64
@@ -190,6 +191,16 @@ type Model struct {
 	statusErr bool
 	showHelp  bool
 	outDir    string
+}
+
+type session struct {
+	conn         db.Conn
+	connName     string
+	editor       editor.Model
+	results      results.Model
+	completer    *ac.Engine
+	tableSchemas map[string]string
+	editCache    map[string]editInfo
 }
 
 func New(cfg *config.Config, t *i18n.Translator) *Model {
@@ -225,6 +236,7 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.editCache = map[string]editInfo{}
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
+	m.sessions = map[string]*session{}
 	if wd, err := os.Getwd(); err == nil {
 		m.outDir = wd
 	}
@@ -352,7 +364,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case sidebar.ConnectMsg:
-		return m, m.connectCmd(msg.Name)
+		return m, m.switchToConnection(msg.Name)
 	case sidebar.SelectTableMsg:
 		return m, m.openTable(msg)
 	case sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg:
@@ -719,7 +731,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 		m.setStatus(m.t.T(i18n.KeyErrorConnect, msg.err), true)
 		return nil
 	}
-	if m.conn != nil {
+	if m.conn != nil && m.connName == msg.name {
 		m.conn.Close()
 	}
 	m.conn = msg.conn
@@ -1296,10 +1308,106 @@ func (m *Model) disconnect() {
 		m.conn.Close()
 		m.conn = nil
 	}
+	if m.connName != "" {
+		delete(m.sessions, m.connName)
+	}
 	m.connName = ""
+	m.completer.Reset()
+	m.tableSchemas = map[string]string{}
+	m.editCache = map[string]editInfo{}
 	m.sidebar.ClearConn()
 	m.results.Clear()
 	m.setStatus(m.t.T(i18n.KeyStatusDisconnected), false)
+}
+
+func (m *Model) switchToConnection(name string) tea.Cmd {
+	if name == m.connName {
+		return nil
+	}
+	if saved, ok := m.sessions[name]; ok {
+		m.saveCurrentSession()
+		m.activateSession(name, saved)
+		return m.sidebar.SetConn(saved.conn)
+	}
+	m.saveCurrentSession()
+	m.resetSession()
+	return m.connectCmd(name)
+}
+
+func (m *Model) saveCurrentSession() {
+	if m.conn == nil || m.connName == "" {
+		return
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.running = false
+	m.querySeq++
+	m.sessions[m.connName] = &session{
+		conn:         m.conn,
+		connName:     m.connName,
+		editor:       m.editor,
+		results:      m.results,
+		completer:    m.completer,
+		tableSchemas: m.tableSchemas,
+		editCache:    m.editCache,
+	}
+}
+
+func (m *Model) activateSession(name string, saved *session) {
+	m.conn = saved.conn
+	m.connName = name
+	m.editor = saved.editor
+	m.results = saved.results
+	m.completer = saved.completer
+	m.tableSchemas = saved.tableSchemas
+	m.editCache = saved.editCache
+	m.executor = query.Executor{
+		Conn:        saved.conn,
+		MaxRows:     m.cfg.Query.MaxRows,
+		AlwaysQuery: saved.conn.Type() == "redis" || saved.conn.Type() == "mongo",
+	}
+	m.pendingSource = nil
+	m.pendingCmd = nil
+	m.running = false
+	m.querySeq++
+	delete(m.sessions, name)
+	m.closeOverlays()
+	m.layout()
+	m.setStatus(m.t.T(i18n.KeyStatusConnected, name), false)
+}
+
+func (m *Model) resetSession() {
+	m.conn = nil
+	m.connName = ""
+	m.running = false
+	m.pendingSource = nil
+	m.pendingCmd = nil
+	m.editor = editor.New(m.t)
+	m.results = results.New(m.t)
+	m.completer = ac.New()
+	m.tableSchemas = map[string]string{}
+	m.editCache = map[string]editInfo{}
+	if m.history != nil {
+		m.editor.SetHistory(m.history.Entries())
+	}
+	m.closeOverlays()
+	m.sidebar.ClearConn()
+	m.layout()
+}
+
+func (m *Model) closeOverlays() {
+	m.options.Close()
+	m.tableMenu.Close()
+	m.textView.Close()
+	m.detail.Close()
+	m.connForm.Close()
+	m.cellEdit.Close()
+	m.confirm.Close()
+	m.completion.Close()
+	m.showHelp = false
+	m.pendingCmd = nil
 }
 
 func (m *Model) menuItems() []menu.Item {
@@ -1803,6 +1911,12 @@ func (m *Model) shutdown() {
 	if m.conn != nil {
 		m.conn.Close()
 		m.conn = nil
+	}
+	for name, saved := range m.sessions {
+		if saved.conn != nil {
+			saved.conn.Close()
+		}
+		delete(m.sessions, name)
 	}
 	if store := m.history; store != nil {
 		_ = store.Save()

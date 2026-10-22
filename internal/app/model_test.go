@@ -863,6 +863,47 @@ func TestInsertTemplate(t *testing.T) {
 	}
 }
 
+func TestSessionSwitching(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.shutdown()
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.editor.SetValue("SELECT 1;")
+
+	data, err := os.ReadFile(m.cfg.Connections[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "second.db")
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := config.Connection{Name: "second", Type: config.TypeSQLite, Path: secondPath}
+	m.cfg.Connections = append(m.cfg.Connections, second)
+	m.sidebar.AddConnection(second)
+
+	m = runCmd(t, m, m.switchToConnection("second"))
+	if m.connName != "second" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+	if m.editor.Value() != "" {
+		t.Fatalf("new session editor = %q", m.editor.Value())
+	}
+
+	m.editor.SetValue("SELECT 2;")
+	m = runCmd(t, m, m.switchToConnection("local-sqlite"))
+	if m.connName != "local-sqlite" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+	if m.editor.Value() != "SELECT 1;" {
+		t.Fatalf("restored editor = %q", m.editor.Value())
+	}
+	if m.results.Result() == nil {
+		t.Fatal("results should be restored with the session")
+	}
+}
+
 func TestMenuSettings(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
