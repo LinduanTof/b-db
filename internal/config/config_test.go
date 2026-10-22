@@ -103,6 +103,15 @@ connections:
 	}
 }
 
+func TestMySQLDatabaseOptional(t *testing.T) {
+	cfg := &Config{Connections: []Connection{
+		{Name: "m", Type: TypeMySQL, Host: "127.0.0.1", User: "root"},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("mysql without database should be valid: %v", err)
+	}
+}
+
 func TestDurationParsing(t *testing.T) {
 	path := writeConfig(t, `
 query:

@@ -125,6 +125,13 @@ func Exists(name string) bool {
 
 func Current() string { return current }
 
+func AccentColor() string {
+	if p, ok := palettes[current]; ok {
+		return p.Title
+	}
+	return "117"
+}
+
 func Set(name string) string {
 	key := strings.ToLower(strings.TrimSpace(name))
 	p, ok := palettes[key]

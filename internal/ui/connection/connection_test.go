@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/linduan/bdb/internal/config"
 	"github.com/linduan/bdb/internal/i18n"
@@ -55,6 +56,80 @@ func TestCycleType(t *testing.T) {
 	}
 }
 
+func TestMySQLHidesDatabase(t *testing.T) {
+	m := newOpen()
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if len(m.visibleFields()) != 6 {
+		t.Fatalf("mysql visible fields = %d, want 6", len(m.visibleFields()))
+	}
+	if strings.Contains(m.View(), "Database") {
+		t.Fatalf("mysql form should not ask for a database:\n%s", m.View())
+	}
+}
+
+func TestArrowKeysMoveFocus(t *testing.T) {
+	m := newOpen()
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.focus != 1 {
+		t.Fatalf("focus = %d, want 1", m.focus)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.focus != 2 {
+		t.Fatalf("focus = %d, want 2", m.focus)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.focus != 1 {
+		t.Fatalf("focus = %d, want 1", m.focus)
+	}
+}
+
+func TestSpaciousRows(t *testing.T) {
+	m := newOpen()
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) < 20 {
+		t.Fatalf("expected spacious layout, got %d lines", len(lines))
+	}
+}
+
+func TestViewAlignedWidth(t *testing.T) {
+	m := newOpen()
+	lines := strings.Split(m.View(), "\n")
+	w := ansi.StringWidth(lines[0])
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got != w {
+			t.Fatalf("line %d width = %d, want %d", i, got, w)
+		}
+	}
+}
+
+func TestMySQLSubmitWithoutDatabase(t *testing.T) {
+	m := newOpen()
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "m"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "h"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "u"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "p"})
+
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = model
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+	msg := cmd().(SubmittedMsg)
+	if msg.Conn.Type != config.TypeMySQL || msg.Conn.Database != "" {
+		t.Fatalf("connection = %+v", msg.Conn)
+	}
+	if msg.Conn.Host != "h" || msg.Conn.User != "u" || msg.Conn.Port != 3306 {
+		t.Fatalf("connection = %+v", msg.Conn)
+	}
+}
+
 func TestSubmitSQLite(t *testing.T) {
 	m := newOpen()
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -96,7 +171,6 @@ func TestValidation(t *testing.T) {
 	m.connType = config.TypeMySQL
 	m.setValue(fieldHost, "h")
 	m.setValue(fieldUser, "u")
-	m.setValue(fieldDatabase, "d")
 	m.setValue(fieldPort, "abc")
 	if _, err := m.build(); err == nil {
 		t.Fatal("expected invalid port error")

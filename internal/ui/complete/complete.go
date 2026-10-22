@@ -118,7 +118,7 @@ func (m *Model) View() string {
 	content := strings.Join(lines, "\n")
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("117")).
+		BorderForeground(lipgloss.Color(theme.AccentColor())).
 		Padding(0, 1).
 		Width(contentW).
 		Render(content)

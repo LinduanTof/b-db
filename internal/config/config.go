@@ -205,9 +205,13 @@ func (c Connection) validate() error {
 		return fmt.Errorf("invalid port %d", c.Port)
 	}
 	switch c.Type {
-	case TypePostgres, TypeMySQL:
+	case TypePostgres:
 		if c.Host == "" || c.User == "" || c.Database == "" {
-			return fmt.Errorf("host, user and database are required for %s", c.Type)
+			return fmt.Errorf("host, user and database are required for postgres")
+		}
+	case TypeMySQL:
+		if c.Host == "" || c.User == "" {
+			return fmt.Errorf("host and user are required for mysql")
 		}
 	case TypeSQLite:
 		if c.Path == "" {

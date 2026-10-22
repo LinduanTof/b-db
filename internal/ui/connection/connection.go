@@ -115,6 +115,12 @@ func (m *Model) Update(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	case "esc":
 		m.open = false
 		return *m, nil
+	case "up":
+		m.moveFocus(-1)
+		return *m, nil
+	case "down":
+		m.moveFocus(1)
+		return *m, nil
 	case "tab":
 		m.moveFocus(1)
 		return *m, nil
@@ -152,43 +158,89 @@ func (m *Model) View() string {
 	if !m.open || m.width <= 0 || m.height <= 0 {
 		return ""
 	}
-	boxW := min(66, m.width-4)
-	boxW = max(boxW, 40)
-	contentW := max(20, boxW-4)
 
-	lines := []string{theme.Title.Render(textutil.FitLine(" "+m.t.T(i18n.KeyFormTitle), contentW)), ""}
+	boxW := min(80, m.width-4)
+	if boxW < 56 {
+		boxW = max(40, m.width-2)
+	}
+	contentW := max(30, boxW-6)
+
+	const labelW = 14
+	inputW := contentW - labelW - 5
+	if inputW < 16 {
+		inputW = 16
+	}
+	m.setInputWidths(inputW)
+
+	blockW := 1 + 1 + labelW + 1 + inputW
+	leftPad := max(0, (contentW-blockW)/2)
+
+	title := m.t.T(i18n.KeyFormTitle)
+	titlePad := max(0, (contentW-textutil.Width(title))/2)
+	lines := []string{
+		strings.Repeat(" ", titlePad) + theme.Title.Render(title),
+		"",
+	}
+
 	visible := m.visibleFields()
+	spacious := m.height >= 2*len(visible)+9
 	for i, f := range visible {
 		selected := i == m.focus
-		if f.kind == fieldType {
-			line := " ◀ " + m.connType + " ▶"
-			if selected {
-				line = theme.Selected.Render(textutil.FitLine(line, contentW))
-			} else {
-				line = textutil.FitLine(line, contentW)
-			}
-			lines = append(lines, line)
-			continue
-		}
 		marker := " "
+		labelStyle := lipgloss.NewStyle()
 		if selected {
-			marker = "›"
+			marker = "▸"
+			labelStyle = theme.Header
 		}
-		label := marker + pad(m.t.T(f.labelKey()), 12)
-		lines = append(lines, textutil.FitLine(label+f.input.View(), contentW))
+
+		var value string
+		if f.kind == fieldType {
+			value = "◀ " + m.connType + " ▶"
+			if selected {
+				value = theme.Header.Render(value)
+			}
+		} else {
+			value = f.input.View()
+		}
+
+		line := strings.Repeat(" ", leftPad) + marker + " " +
+			labelStyle.Render(pad(m.t.T(f.labelKey()), labelW)) + " " + value
+		lines = append(lines, textutil.FitLine(line, contentW))
+		if spacious && i < len(visible)-1 {
+			lines = append(lines, "")
+		}
 	}
+
 	if m.errText != "" {
 		lines = append(lines, "", theme.Error.Render(textutil.FitLine(" "+m.errText, contentW)))
 	}
-	lines = append(lines, "", theme.Muted.Render(textutil.FitLine(" "+m.t.T(i18n.KeyFormHint), contentW)))
+	lines = append(lines, "",
+		theme.Muted.Render(textutil.FitLine(centerText(m.t.T(i18n.KeyFormHint), contentW), contentW)),
+	)
 
 	content := strings.Join(lines, "\n")
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("117")).
-		Padding(0, 1).
+		BorderForeground(lipgloss.Color(theme.AccentColor())).
+		Padding(1, 2).
 		Width(contentW).
 		Render(content)
+}
+
+func (m *Model) setInputWidths(width int) {
+	for i := range m.fields {
+		if m.fields[i].kind == fieldType {
+			continue
+		}
+		m.fields[i].input.SetWidth(width)
+	}
+}
+
+func centerText(s string, width int) string {
+	if w := textutil.Width(s); w < width {
+		return strings.Repeat(" ", (width-w)/2) + s
+	}
+	return s
 }
 
 func (m *Model) submit() (Model, tea.Cmd) {
@@ -219,15 +271,11 @@ func (m *Model) build() (config.Connection, error) {
 	case config.TypePostgres, config.TypeMySQL:
 		host := strings.TrimSpace(m.input(fieldHost).Value())
 		user := strings.TrimSpace(m.input(fieldUser).Value())
-		database := strings.TrimSpace(m.input(fieldDatabase).Value())
 		if host == "" {
 			return config.Connection{}, m.required(i18n.KeyFormHost)
 		}
 		if user == "" {
 			return config.Connection{}, m.required(i18n.KeyFormUser)
-		}
-		if database == "" {
-			return config.Connection{}, m.required(i18n.KeyFormDatabase)
 		}
 		port := 0
 		if portText := strings.TrimSpace(m.input(fieldPort).Value()); portText != "" {
@@ -239,10 +287,14 @@ func (m *Model) build() (config.Connection, error) {
 		}
 		conn.Host = host
 		conn.User = user
-		conn.Database = database
 		conn.Port = port
 		conn.Password = m.input(fieldPassword).Value()
 		if m.connType == config.TypePostgres {
+			database := strings.TrimSpace(m.input(fieldDatabase).Value())
+			if database == "" {
+				return config.Connection{}, m.required(i18n.KeyFormDatabase)
+			}
+			conn.Database = database
 			conn.SSLMode = strings.TrimSpace(m.input(fieldSSLMode).Value())
 		}
 	default:
@@ -285,7 +337,7 @@ func (m *Model) isVisible(kind fieldKind) bool {
 	case config.TypeSQLite:
 		return kind == fieldType || kind == fieldName || kind == fieldPath
 	case config.TypeMySQL:
-		return kind != fieldPath && kind != fieldSSLMode
+		return kind != fieldPath && kind != fieldSSLMode && kind != fieldDatabase
 	default:
 		return kind != fieldPath
 	}
