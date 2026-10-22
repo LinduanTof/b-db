@@ -16,6 +16,7 @@ import (
 	ac "github.com/linduan-guan/b-db/internal/complete"
 	"github.com/linduan-guan/b-db/internal/config"
 	"github.com/linduan-guan/b-db/internal/db"
+	_ "github.com/linduan-guan/b-db/internal/db/redis"
 	_ "github.com/linduan-guan/b-db/internal/db/sql"
 	"github.com/linduan-guan/b-db/internal/export"
 	"github.com/linduan-guan/b-db/internal/history"
@@ -158,6 +159,7 @@ type Model struct {
 
 	tableMenuSchema string
 	tableMenuTable  string
+	tableMenuKind   string
 
 	completer    *ac.Engine
 	tableSchemas map[string]string
@@ -267,7 +269,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyMenuChange(msg)
 		return m, nil
 	case sidebar.TableMenuMsg:
-		m.tableMenuSchema, m.tableMenuTable = msg.Schema, msg.Table
+		m.tableMenuSchema, m.tableMenuTable, m.tableMenuKind = msg.Schema, msg.Table, msg.Kind
 		m.tableMenu.Open(qualifiedTable(msg.Schema, msg.Table), m.tableMenuItems())
 		return m, nil
 	case ddlLoadedMsg:
@@ -721,7 +723,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	}
 	m.conn = msg.conn
 	m.connName = msg.name
-	m.executor = query.Executor{Conn: m.conn, MaxRows: m.cfg.Query.MaxRows}
+	m.executor = query.Executor{Conn: m.conn, MaxRows: m.cfg.Query.MaxRows, AlwaysQuery: m.conn.Type() == "redis"}
 	m.editCache = map[string]editInfo{}
 	m.editTarget = editTarget{}
 	m.setStatus(m.t.T(i18n.KeyStatusConnected, msg.name), false)
@@ -827,10 +829,47 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 }
 
 func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
+	if m.conn != nil && m.conn.Type() == "redis" {
+		m.editor.SetValue(redisCommand(msg.Kind, msg.Table))
+		m.focus = focusEditor
+		m.layout()
+		return m.editor.Focus()
+	}
 	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(msg.Schema, msg.Table)))
 	m.focus = focusEditor
 	m.layout()
 	return m.editor.Focus()
+}
+
+func redisCommand(kind, key string) string {
+	quoted := quoteRedisArg(key)
+	switch strings.ToLower(kind) {
+	case "string":
+		return "GET " + quoted
+	case "hash":
+		return "HGETALL " + quoted
+	case "list":
+		return "LRANGE " + quoted + " 0 99"
+	case "set":
+		return "SMEMBERS " + quoted
+	case "zset":
+		return "ZRANGE " + quoted + " 0 99 WITHSCORES"
+	case "stream":
+		return "XRANGE " + quoted + " - + COUNT 100"
+	default:
+		return "TYPE " + quoted
+	}
+}
+
+func quoteRedisArg(value string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`) + `"`
+}
+
+func (m *Model) redisTableData(schema, table, kind string) tea.Cmd {
+	m.editor.SetValue(redisCommand(kind, table))
+	m.focus = focusResults
+	m.layout()
+	return m.runQuery()
 }
 
 func qualifiedTable(schema, table string) string {
@@ -851,6 +890,12 @@ func (m *Model) tableData(schema, table string) tea.Cmd {
 }
 
 func (m *Model) tableMenuItems() []menu.Item {
+	if m.conn != nil && m.conn.Type() == "redis" {
+		return []menu.Item{
+			{ID: "table.data", LabelKey: i18n.KeyTableData, Kind: menu.KindAction},
+			{ID: "table.select", LabelKey: i18n.KeyTableSelect, Kind: menu.KindAction},
+		}
+	}
 	return []menu.Item{
 		{ID: "table.data", LabelKey: i18n.KeyTableData, Kind: menu.KindAction},
 		{ID: "table.ddl", LabelKey: i18n.KeyTableDDL, Kind: menu.KindAction},
@@ -863,6 +908,16 @@ func (m *Model) tableMenuItems() []menu.Item {
 
 func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	schema, table := m.tableMenuSchema, m.tableMenuTable
+	if m.conn != nil && m.conn.Type() == "redis" {
+		switch msg.ID {
+		case "table.data":
+			return m.redisTableData(schema, table, m.tableMenuKind)
+		case "table.select":
+			return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table, Kind: m.tableMenuKind})
+		}
+		m.setStatus(m.t.T(i18n.KeyErrorUnsupportedFeature, "redis"), true)
+		return nil
+	}
 	switch msg.ID {
 	case "table.data":
 		return m.tableData(schema, table)

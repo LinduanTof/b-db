@@ -56,9 +56,9 @@ type ColumnsLoadedMsg struct {
 
 type ConnectMsg struct{ Name string }
 
-type SelectTableMsg struct{ Schema, Table string }
+type SelectTableMsg struct{ Schema, Table, Kind string }
 
-type TableMenuMsg struct{ Schema, Table string }
+type TableMenuMsg struct{ Schema, Table, Kind string }
 
 func MsgError(msg any) error {
 	switch m := msg.(type) {
@@ -246,7 +246,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		n := m.selected()
 		if n != nil && n.Kind == KindTable {
 			return func() tea.Msg {
-				return SelectTableMsg{Schema: n.Schema, Table: n.Table}
+				return SelectTableMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
 			}
 		}
 	case "r":
@@ -267,8 +267,8 @@ func (m *Model) activate() tea.Cmd {
 		return func() tea.Msg { return ConnectMsg{Name: name} }
 	}
 	if n.Kind == KindTable {
-		schema, table := n.Schema, n.Table
-		return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table} }
+		schema, table, kind := n.Schema, n.Table, n.Sub
+		return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table, Kind: kind} }
 	}
 	return m.toggle(n)
 }

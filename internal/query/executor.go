@@ -10,8 +10,9 @@ import (
 )
 
 type Executor struct {
-	Conn    db.Conn
-	MaxRows int
+	Conn        db.Conn
+	MaxRows     int
+	AlwaysQuery bool
 }
 
 type Outcome struct {
@@ -23,7 +24,7 @@ type Outcome struct {
 
 func (e Executor) Run(ctx context.Context, stmt string) Outcome {
 	start := time.Now()
-	if IsQuery(stmt) {
+	if e.AlwaysQuery || IsQuery(stmt) {
 		rs, err := e.Conn.Querier().Query(ctx, stmt, e.MaxRows)
 		return Outcome{Result: rs, Err: err, Elapsed: time.Since(start)}
 	}
