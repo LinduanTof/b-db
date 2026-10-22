@@ -31,6 +31,9 @@ const (
 	fieldDatabase
 	fieldSSLMode
 	fieldPath
+	fieldAddr
+	fieldDB
+	fieldURI
 )
 
 type field struct {
@@ -61,6 +64,9 @@ func New(t *i18n.Translator) Model {
 		{kind: fieldDatabase, input: newInput("postgres")},
 		{kind: fieldSSLMode, input: newInput("disable")},
 		{kind: fieldPath, input: newInput("./data.db")},
+		{kind: fieldAddr, input: newInput("127.0.0.1:6379")},
+		{kind: fieldDB, input: newInput("0")},
+		{kind: fieldURI, input: newInput("mongodb://127.0.0.1:27017")},
 	}
 	return m
 }
@@ -297,6 +303,28 @@ func (m *Model) build() (config.Connection, error) {
 			conn.Database = database
 			conn.SSLMode = strings.TrimSpace(m.input(fieldSSLMode).Value())
 		}
+	case config.TypeRedis:
+		addr := strings.TrimSpace(m.input(fieldAddr).Value())
+		if addr == "" {
+			return config.Connection{}, m.required(i18n.KeyFormAddr)
+		}
+		database := 0
+		if text := strings.TrimSpace(m.input(fieldDB).Value()); text != "" {
+			value, err := strconv.Atoi(text)
+			if err != nil || value < 0 {
+				return config.Connection{}, errors.New(m.t.T(i18n.KeyFormInvalidDB, text))
+			}
+			database = value
+		}
+		conn.Addr = addr
+		conn.Password = m.input(fieldPassword).Value()
+		conn.DB = database
+	case config.TypeMongo:
+		uri := strings.TrimSpace(m.input(fieldURI).Value())
+		if uri == "" {
+			return config.Connection{}, m.required(i18n.KeyFormURI)
+		}
+		conn.URI = uri
 	default:
 		return config.Connection{}, errors.New(m.t.T(i18n.KeyErrorNotSupported, m.connType))
 	}
@@ -323,23 +351,31 @@ func (m *Model) setValue(kind fieldKind, value string) {
 }
 
 func (m *Model) visibleFields() []*field {
-	out := make([]*field, 0, len(m.fields))
-	for i := range m.fields {
-		if m.isVisible(m.fields[i].kind) {
-			out = append(out, &m.fields[i])
+	order := m.fieldOrder()
+	out := make([]*field, 0, len(order))
+	for _, kind := range order {
+		for i := range m.fields {
+			if m.fields[i].kind == kind {
+				out = append(out, &m.fields[i])
+				break
+			}
 		}
 	}
 	return out
 }
 
-func (m *Model) isVisible(kind fieldKind) bool {
+func (m *Model) fieldOrder() []fieldKind {
 	switch m.connType {
 	case config.TypeSQLite:
-		return kind == fieldType || kind == fieldName || kind == fieldPath
+		return []fieldKind{fieldType, fieldName, fieldPath}
 	case config.TypeMySQL:
-		return kind != fieldPath && kind != fieldSSLMode && kind != fieldDatabase
+		return []fieldKind{fieldType, fieldName, fieldHost, fieldPort, fieldUser, fieldPassword}
+	case config.TypeRedis:
+		return []fieldKind{fieldType, fieldName, fieldAddr, fieldPassword, fieldDB}
+	case config.TypeMongo:
+		return []fieldKind{fieldType, fieldName, fieldURI}
 	default:
-		return kind != fieldPath
+		return []fieldKind{fieldType, fieldName, fieldHost, fieldPort, fieldUser, fieldPassword, fieldDatabase, fieldSSLMode}
 	}
 }
 
@@ -358,7 +394,7 @@ func (m *Model) moveFocus(delta int) {
 }
 
 func (m *Model) cycleType(delta int) {
-	types := []string{config.TypePostgres, config.TypeMySQL, config.TypeSQLite}
+	types := []string{config.TypePostgres, config.TypeMySQL, config.TypeSQLite, config.TypeRedis, config.TypeMongo}
 	index := 0
 	for i, typ := range types {
 		if typ == m.connType {
@@ -387,6 +423,17 @@ func (m *Model) cycleType(delta int) {
 		if port.Value() == "" || port.Value() == "5432" {
 			port.SetValue("3306")
 		}
+	case config.TypeRedis:
+		if m.input(fieldAddr).Value() == "" {
+			m.setValue(fieldAddr, "127.0.0.1:6379")
+		}
+		if m.input(fieldDB).Value() == "" {
+			m.setValue(fieldDB, "0")
+		}
+	case config.TypeMongo:
+		if m.input(fieldURI).Value() == "" {
+			m.setValue(fieldURI, "mongodb://127.0.0.1:27017")
+		}
 	}
 }
 
@@ -408,6 +455,12 @@ func (f *field) labelKey() string {
 		return i18n.KeyFormSSLMode
 	case fieldPath:
 		return i18n.KeyFormPath
+	case fieldAddr:
+		return i18n.KeyFormAddr
+	case fieldDB:
+		return i18n.KeyFormDB
+	case fieldURI:
+		return i18n.KeyFormURI
 	default:
 		return i18n.KeyFormType
 	}
