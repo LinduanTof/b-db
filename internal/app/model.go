@@ -22,11 +22,11 @@ import (
 	"github.com/linduan/bdb/internal/i18n"
 	"github.com/linduan/bdb/internal/query"
 	"github.com/linduan/bdb/internal/sqlscript"
-	"github.com/linduan/bdb/internal/ui/command"
 	uicomplete "github.com/linduan/bdb/internal/ui/complete"
 	"github.com/linduan/bdb/internal/ui/connection"
 	"github.com/linduan/bdb/internal/ui/detail"
 	"github.com/linduan/bdb/internal/ui/editor"
+	"github.com/linduan/bdb/internal/ui/menu"
 	"github.com/linduan/bdb/internal/ui/results"
 	"github.com/linduan/bdb/internal/ui/sidebar"
 	"github.com/linduan/bdb/internal/ui/statusbar"
@@ -100,7 +100,7 @@ type Model struct {
 	editor     editor.Model
 	results    results.Model
 	statusbar  statusbar.Model
-	command    command.Model
+	options    menu.Model
 	detail     detail.Model
 	completion uicomplete.Model
 	connForm   connection.Model
@@ -149,7 +149,7 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.sidebar = sidebar.New(cfg.Connections, t)
 	m.editor = editor.New(t)
 	m.results = results.New(t)
-	m.command = command.New(t)
+	m.options = menu.New(t)
 	m.detail = detail.New(t)
 	m.completion = uicomplete.New(t)
 	m.connForm = connection.New(t)
@@ -175,7 +175,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.command.SetSize(msg.Width, msg.Height)
+		m.options.SetSize(msg.Width, msg.Height)
 		m.detail.SetSize(msg.Width, msg.Height)
 		m.completion.SetSize(msg.Width, msg.Height)
 		m.connForm.SetSize(msg.Width, msg.Height)
@@ -183,8 +183,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
-	case command.SelectedMsg:
-		return m, m.runCommand(msg)
+	case menu.ActionMsg:
+		return m, m.runMenuAction(msg)
+	case menu.ChangedMsg:
+		m.applyMenuChange(msg)
+		return m, nil
 	case detailLoadedMsg:
 		if m.detail.IsOpen() && m.detail.Title() == msg.title {
 			if msg.err != nil {
@@ -276,9 +279,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.shutdown()
 		return tea.Quit
 	}
-	if m.command.IsOpen() {
+	if m.options.IsOpen() {
+		if key == "q" {
+			m.shutdown()
+			return tea.Quit
+		}
 		var cmd tea.Cmd
-		m.command, cmd = m.command.Update(msg)
+		m.options, cmd = m.options.Update(msg)
 		return cmd
 	}
 	if m.detail.IsOpen() {
@@ -305,16 +312,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.showHelp = true
 		return nil
 	}
-	if key == ":" && m.focus != focusEditor {
-		m.command.Open()
-		return nil
-	}
 	if key == "esc" {
 		if m.running {
 			m.cancelQuery()
 			return nil
 		}
-		m.command.Open()
+		m.completion.Close()
+		m.options.Open(m.menuItems())
 		return nil
 	}
 	if key == "q" && m.focus != focusEditor {
@@ -632,8 +636,8 @@ func (m *Model) render() string {
 		return m.detail.View()
 	}
 	base := m.renderMain()
-	if m.command.IsOpen() {
-		return textutil.Overlay(base, m.command.View(), m.width, m.height)
+	if m.options.IsOpen() {
+		return textutil.Overlay(base, m.options.View(), m.width, m.height)
 	}
 	if m.connForm.IsOpen() {
 		return textutil.Overlay(base, m.connForm.View(), m.width, m.height)
@@ -661,7 +665,7 @@ func (m *Model) renderMain() string {
 	m.statusbar.Left = m.statusLeft()
 	m.statusbar.Right = m.status
 	m.statusbar.IsError = m.statusErr
-	menu := theme.MenuBar.Render(textutil.FitLine(" "+m.t.T(i18n.KeyMenuHint), m.width))
+	menu := theme.MenuBar.Render(textutil.FitLine(" "+m.t.T(i18n.KeyMenuBarHint), m.width))
 	return body + "\n" + m.statusbar.View() + "\n" + menu
 }
 
@@ -679,26 +683,8 @@ func (m *Model) renderHelp() string {
 	for _, section := range sections {
 		lines = append(lines, theme.Header.Render(section.title), "  "+section.keys)
 	}
-	lines = append(lines, "", theme.Header.Render(m.t.T(i18n.KeyHelpCommands)))
-
-	cmds := command.Definitions()
-	if m.height < 28 && len(cmds) > 5 {
-		cmds = cmds[:5]
-	}
-	for _, d := range cmds {
-		name := ":" + d.Name
-		if d.Args != "" {
-			name += " " + d.Args
-		}
-		line := "  " + name
-		if w := textutil.Width(line); w < 34 {
-			line += strings.Repeat(" ", 34-w)
-		}
-		lines = append(lines, line+"  "+m.t.T(d.DescKey))
-	}
 	lines = append(lines, "",
-		theme.Muted.Render(m.t.T(i18n.KeyHelpThemes, strings.Join(theme.Names(), ", "))),
-		theme.Muted.Render(m.t.T(i18n.KeyHelpCommandsTip)),
+		theme.Muted.Render(m.t.T(i18n.KeyMenuHint)),
 		theme.Muted.Render(m.t.T(i18n.KeyHelpClose)),
 	)
 
@@ -729,126 +715,150 @@ func (m *Model) statusLeft() string {
 	return strings.Join(parts, "  ")
 }
 
-func (m *Model) runCommand(msg command.SelectedMsg) tea.Cmd {
-	usage := func(text string) tea.Cmd {
-		m.setStatus(m.t.T(i18n.KeyErrorUsage, text), true)
-		return nil
-	}
-	switch msg.Name {
-	case "connect":
-		if len(msg.Args) < 1 {
-			return usage("connect <name>")
-		}
-		return m.connectCmd(msg.Args[0])
-	case "disconnect":
-		if m.cancel != nil {
-			m.cancel()
-			m.cancel = nil
-		}
-		m.running = false
-		if m.conn != nil {
-			m.conn.Close()
-			m.conn = nil
-		}
-		m.connName = ""
-		m.sidebar.ClearConn()
-		m.results.Clear()
-		m.setStatus(m.t.T(i18n.KeyStatusDisconnected), false)
-		return nil
-	case "export":
-		kind := "csv"
-		if len(msg.Args) > 0 {
-			kind = strings.ToLower(msg.Args[0])
-		}
-		if kind != "csv" && kind != "json" && kind != "md" {
-			return usage("export csv|json|md")
-		}
-		return m.exportCmd(kind)
-	case "describe":
-		schema, table, ok := m.sidebar.SelectedTable()
-		if !ok {
-			return usage("describe (select a table first)")
-		}
-		return m.openDetail(schema, table)
-	case "run":
-		if len(msg.Args) < 1 {
-			return usage("run <path>")
-		}
-		return m.runScriptCmd(msg.Args[0])
+func (m *Model) runMenuAction(msg menu.ActionMsg) tea.Cmd {
+	switch msg.ID {
 	case "add":
 		m.completion.Close()
 		m.connForm.Open()
-		return nil
-	case "focus":
-		if len(msg.Args) < 1 {
-			return usage("focus sidebar|editor|results")
-		}
-		target := msg.Args[0]
-		if target != "sidebar" && target != "editor" && target != "results" {
-			return usage("focus sidebar|editor|results")
-		}
-		m.editor.Blur()
-		switch target {
-		case "sidebar":
-			m.focus = focusSidebar
-		case "editor":
-			m.focus = focusEditor
-			return m.editor.Focus()
-		case "results":
-			m.focus = focusResults
-		}
-		return nil
-	case "lang":
-		if len(msg.Args) < 1 {
-			return usage("lang en|zh")
-		}
-		switch strings.ToLower(msg.Args[0]) {
-		case "en":
-			m.t.SetLang(i18n.En)
-		case "zh":
-			m.t.SetLang(i18n.Zh)
-		default:
-			return usage("lang en|zh")
-		}
-		m.setStatus(m.t.T(i18n.KeyStatusLang, string(m.t.Lang())), false)
-		return nil
-	case "theme":
-		names := theme.Names()
-		target := ""
-		if len(msg.Args) > 0 {
-			target = msg.Args[0]
-		} else {
-			idx := 0
-			for i, n := range names {
-				if n == m.themeName {
-					idx = (i + 1) % len(names)
-					break
-				}
-			}
-			target = names[idx]
-		}
-		if !theme.Exists(target) {
-			m.setStatus(m.t.T(i18n.KeyErrorTheme, target, strings.Join(names, ", ")), true)
-			return nil
-		}
-		m.themeName = theme.Set(target)
-		_ = config.SaveThemeState(m.themeName)
-		m.setStatus(m.t.T(i18n.KeyStatusTheme, m.themeName), false)
-		return nil
+	case "disconnect":
+		m.disconnect()
+	case "export.csv":
+		return m.exportCmd("csv")
+	case "export.json":
+		return m.exportCmd("json")
+	case "export.md":
+		return m.exportCmd("md")
 	case "help":
 		m.showHelp = true
-		return nil
-	case "reload":
-		if m.connName == "" {
-			m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
-			return nil
-		}
-		name := m.connName
-		return m.connectCmd(name)
 	case "quit":
+		m.shutdown()
 		return tea.Quit
 	}
 	return nil
+}
+
+func (m *Model) applyMenuChange(msg menu.ChangedMsg) {
+	switch msg.ID {
+	case "theme":
+		names := theme.Names()
+		if msg.Value < 0 || msg.Value >= len(names) {
+			return
+		}
+		m.themeName = theme.Set(names[msg.Value])
+		_ = config.SaveThemeState(m.themeName)
+		m.setStatus(m.t.T(i18n.KeyStatusTheme, m.themeName), false)
+	case "lang":
+		langs := []string{"en", "zh"}
+		if msg.Value < 0 || msg.Value >= len(langs) {
+			return
+		}
+		m.t.SetLang(i18n.Lang(langs[msg.Value]))
+		m.setStatus(m.t.T(i18n.KeyStatusLang, string(m.t.Lang())), false)
+	case "timeout":
+		values := timeoutChoices()
+		if msg.Value < 0 || msg.Value >= len(values) {
+			return
+		}
+		m.cfg.Query.Timeout = config.Duration(values[msg.Value])
+		m.setStatus(m.t.T(i18n.KeyStatusTimeoutSet, values[msg.Value].String()), false)
+	case "maxrows":
+		values := maxRowChoices()
+		if msg.Value < 0 || msg.Value >= len(values) {
+			return
+		}
+		m.cfg.Query.MaxRows = values[msg.Value]
+		m.executor.MaxRows = values[msg.Value]
+		m.setStatus(m.t.T(i18n.KeyStatusMaxRowsSet, values[msg.Value]), false)
+	}
+}
+
+func (m *Model) disconnect() {
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.running = false
+	if m.conn != nil {
+		m.conn.Close()
+		m.conn = nil
+	}
+	m.connName = ""
+	m.sidebar.ClearConn()
+	m.results.Clear()
+	m.setStatus(m.t.T(i18n.KeyStatusDisconnected), false)
+}
+
+func (m *Model) menuItems() []menu.Item {
+	themes := theme.Names()
+	themeValue := 0
+	for i, name := range themes {
+		if name == m.themeName {
+			themeValue = i
+			break
+		}
+	}
+	langs := []string{"en", "zh"}
+	langValue := 0
+	if m.t.Lang() == i18n.Zh {
+		langValue = 1
+	}
+	timeouts := timeoutChoices()
+	timeoutValue := 0
+	currentTimeout := m.cfg.Query.Timeout.Std()
+	for i, d := range timeouts {
+		if d <= currentTimeout {
+			timeoutValue = i
+		}
+	}
+	rows := maxRowChoices()
+	rowValue := 2
+	for i, v := range rows {
+		if v == m.cfg.Query.MaxRows {
+			rowValue = i
+			break
+		}
+	}
+
+	return []menu.Item{
+		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuActions},
+		{ID: "add", LabelKey: i18n.KeyCmdAdd, Kind: menu.KindAction},
+		{ID: "disconnect", LabelKey: i18n.KeyCmdDisconnect, Kind: menu.KindAction},
+		{ID: "export.csv", LabelKey: i18n.KeyMenuExportCSV, Kind: menu.KindAction},
+		{ID: "export.json", LabelKey: i18n.KeyMenuExportJSON, Kind: menu.KindAction},
+		{ID: "export.md", LabelKey: i18n.KeyMenuExportMarkdown, Kind: menu.KindAction},
+		{ID: "help", LabelKey: i18n.KeyCmdHelp, Kind: menu.KindAction},
+		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuSettings},
+		{ID: "theme", LabelKey: i18n.KeyMenuTheme, Kind: menu.KindChoice, Choices: themes, Value: themeValue},
+		{ID: "lang", LabelKey: i18n.KeyMenuLanguage, Kind: menu.KindChoice, Choices: langs, Value: langValue},
+		{ID: "timeout", LabelKey: i18n.KeyMenuTimeout, Kind: menu.KindChoice, Choices: timeoutLabels(), Value: timeoutValue},
+		{ID: "maxrows", LabelKey: i18n.KeyMenuMaxRows, Kind: menu.KindChoice, Choices: maxRowLabels(), Value: rowValue},
+		{Kind: menu.KindHeader},
+		{ID: "quit", LabelKey: i18n.KeyCmdQuit, Kind: menu.KindAction},
+	}
+}
+
+func timeoutChoices() []time.Duration {
+	return []time.Duration{5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second}
+}
+
+func timeoutLabels() []string {
+	values := timeoutChoices()
+	out := make([]string, len(values))
+	for i, d := range values {
+		out[i] = d.String()
+	}
+	return out
+}
+
+func maxRowChoices() []int { return []int{100, 500, 1000, 5000} }
+
+func maxRowLabels() []string {
+	values := maxRowChoices()
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = strconv.Itoa(v)
+	}
+	return out
 }
 
 func (m *Model) openDetail(schema, table string) tea.Cmd {

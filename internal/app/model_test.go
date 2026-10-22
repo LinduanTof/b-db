@@ -13,9 +13,9 @@ import (
 	"github.com/linduan/bdb/internal/config"
 	"github.com/linduan/bdb/internal/history"
 	"github.com/linduan/bdb/internal/i18n"
-	"github.com/linduan/bdb/internal/ui/command"
 	uicomplete "github.com/linduan/bdb/internal/ui/complete"
 	"github.com/linduan/bdb/internal/ui/connection"
+	"github.com/linduan/bdb/internal/ui/menu"
 	"github.com/linduan/bdb/internal/ui/sidebar"
 	"github.com/linduan/bdb/internal/ui/theme"
 )
@@ -58,7 +58,7 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 		case connOpenedMsg, queryDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
-			sidebar.ConnectMsg, sidebar.SelectTableMsg, command.SelectedMsg:
+			sidebar.ConnectMsg, sidebar.SelectTableMsg, menu.ActionMsg, menu.ChangedMsg:
 		default:
 			return m
 		}
@@ -86,15 +86,17 @@ func connect(t *testing.T, m *Model) *Model {
 	return m
 }
 
-func TestEscOpensPaletteOverlay(t *testing.T) {
+func TestEscOpensOptionsMenu(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	if !m.command.IsOpen() {
-		t.Fatal("esc should open the command palette")
+	if !m.options.IsOpen() {
+		t.Fatal("esc should open the options menu")
 	}
 	content := m.View().Content
-	if !strings.Contains(content, "Command palette") {
-		t.Fatalf("palette missing:\n%s", content)
+	for _, want := range []string{"Options", "Actions", "Settings", "Theme", "Language"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("menu missing %q:\n%s", want, content)
+		}
 	}
 	if !strings.Contains(content, "Connections") {
 		t.Fatalf("overlay should keep the background visible:\n%s", content)
@@ -110,8 +112,8 @@ func TestEscOpensPaletteOverlay(t *testing.T) {
 	}
 
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	if m.command.IsOpen() {
-		t.Fatal("esc should close the palette")
+	if m.options.IsOpen() {
+		t.Fatal("esc should close the menu")
 	}
 }
 
@@ -141,59 +143,59 @@ func TestStatusbarMenuHint(t *testing.T) {
 	}
 }
 
-func TestHelpShowsShortcutsAndCommands(t *testing.T) {
+func TestHelpShowsShortcuts(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Text: "?"})
 	content := m.View().Content
-	for _, want := range []string{"Keyboard shortcuts", "Commands", ":connect", ":export", "ctrl+enter"} {
+	for _, want := range []string{"Keyboard shortcuts", "esc: options menu", "ctrl+enter"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("help missing %q:\n%s", want, content)
 		}
 	}
+	if strings.Contains(content, ":connect") {
+		t.Fatalf("help should not advertise command mode:\n%s", content)
+	}
 }
 
-func TestCommandPalette(t *testing.T) {
+func TestOptionsMenu(t *testing.T) {
 	m := testModel(t, "en")
-	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
-	if !m.command.IsOpen() {
-		t.Fatal("palette should open on ':'")
+	defer theme.Set("default")
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	for i := 0; i < 6; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if content := m.View().Content; !strings.Contains(content, "Command palette") {
-		t.Fatalf("palette view:\n%s", content)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if theme.Current() != "catppuccin" {
+		t.Fatalf("theme = %q, want catppuccin", theme.Current())
+	}
+	if !strings.Contains(m.View().Content, "catppuccin") {
+		t.Fatal("menu should show the updated theme")
 	}
 
-	m = sendKey(t, m, tea.KeyPressMsg{Text: "lang en"})
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.command.IsOpen() {
-		t.Fatal("palette should close after running a command")
-	}
-	if m.t.Lang() != i18n.En {
-		t.Fatalf("lang = %q", m.t.Lang())
-	}
-
-	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
-	m = sendKey(t, m, tea.KeyPressMsg{Text: "focus results"})
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.focus != focusResults {
-		t.Fatalf("focus = %v, want results", m.focus)
-	}
-
-	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
-	m = sendKey(t, m, tea.KeyPressMsg{Text: "lang zh"})
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.t.Lang() != i18n.Zh {
 		t.Fatalf("lang = %q, want zh", m.t.Lang())
 	}
-	if !strings.Contains(m.status, "界面语言") {
-		t.Fatalf("status = %q", m.status)
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.options.IsOpen() {
+		t.Fatal("esc should close the menu")
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.connForm.IsOpen() {
+		t.Fatal("add action should open the connection form")
 	}
 }
 
-func TestCommandDisconnect(t *testing.T) {
+func TestMenuDisconnect(t *testing.T) {
 	m := testModel(t, "en")
 	m = connect(t, m)
-	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
-	m = sendKey(t, m, tea.KeyPressMsg{Text: "disconnect"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.conn != nil || m.connName != "" {
 		t.Fatalf("connection not closed: conn=%v name=%q", m.conn, m.connName)
@@ -442,35 +444,24 @@ func TestAddConnectionCancel(t *testing.T) {
 	}
 }
 
-func TestThemeCommand(t *testing.T) {
+func TestMenuSettings(t *testing.T) {
 	m := testModel(t, "en")
-	defer theme.Set("default")
-
-	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
-	m = sendKey(t, m, tea.KeyPressMsg{Text: "theme dracula"})
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if theme.Current() != "dracula" {
-		t.Fatalf("theme = %q, want dracula", theme.Current())
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	for i := 0; i < 8; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if !strings.Contains(m.status, "Theme: dracula") {
-		t.Fatalf("status = %q", m.status)
-	}
-	if got := config.LoadThemeState(); got != "dracula" {
-		t.Fatalf("saved theme = %q", got)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.cfg.Query.Timeout.Std(); got != 10*time.Second {
+		t.Fatalf("timeout = %s, want 10s", got)
 	}
 
-	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
-	m = sendKey(t, m, tea.KeyPressMsg{Text: "theme"})
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if theme.Current() == "dracula" {
-		t.Fatal("theme command without args should cycle to the next theme")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.cfg.Query.MaxRows != 500 {
+		t.Fatalf("max rows = %d, want 500", m.cfg.Query.MaxRows)
 	}
-
-	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
-	m = sendKey(t, m, tea.KeyPressMsg{Text: "theme nope"})
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !strings.Contains(m.status, "unknown theme") {
-		t.Fatalf("status = %q", m.status)
+	if m.executor.MaxRows != 500 {
+		t.Fatalf("executor max rows = %d, want 500", m.executor.MaxRows)
 	}
 }
 
