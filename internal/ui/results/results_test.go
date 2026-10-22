@@ -153,6 +153,18 @@ func sameOrder(got, want []int) bool {
 	return true
 }
 
+func TestBorders(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 12)
+	m.SetResult(sample(5))
+	view := m.View()
+	for _, want := range []string{"┌", "┬", "┐", "├", "┼", "┤", "└", "┴", "┘", "│"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing border %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestNoResultPromptAndExec(t *testing.T) {
 	m := New(i18n.New("en"))
 	m.SetSize(40, 5)

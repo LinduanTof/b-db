@@ -20,6 +20,7 @@ const (
 	rowNumWidth = 5
 	minColWidth = 4
 	maxColWidth = 40
+	cellPadding = 2
 	nullText    = "NULL"
 )
 
@@ -114,7 +115,7 @@ func (m *Model) computeWidths() {
 	}
 	m.widths = make([]int, len(m.rs.Columns))
 	for i, col := range m.rs.Columns {
-		m.widths[i] = min(max(runewidth.StringWidth(col.Name), minColWidth), maxColWidth)
+		m.widths[i] = min(max(runewidth.StringWidth(col.Name)+cellPadding, minColWidth), maxColWidth)
 	}
 	sample := min(len(m.cells), 200)
 	for r := 0; r < sample; r++ {
@@ -122,7 +123,7 @@ func (m *Model) computeWidths() {
 			if c >= len(m.widths) {
 				break
 			}
-			if w := runewidth.StringWidth(text); w > m.widths[c] {
+			if w := runewidth.StringWidth(text) + cellPadding; w > m.widths[c] {
 				m.widths[c] = min(w, maxColWidth)
 			}
 		}
@@ -156,9 +157,9 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cursorRow = len(m.cells) - 1
 		}
 	case "pgup":
-		m.moveRow(-max(1, m.height-1))
+		m.moveRow(-max(1, m.bodyRows()))
 	case "pgdown":
-		m.moveRow(max(1, m.height-1))
+		m.moveRow(max(1, m.bodyRows()))
 	case "[":
 		m.adjustWidth(-2)
 	case "]":
@@ -315,7 +316,7 @@ func (m *Model) ensureVisible() {
 			}
 		}
 	}
-	visible := max(1, m.height-1)
+	visible := max(1, m.bodyRows())
 	if m.cursorRow < m.scrollRow {
 		m.scrollRow = m.cursorRow
 	}
@@ -327,26 +328,48 @@ func (m *Model) ensureVisible() {
 	}
 }
 
-func (m *Model) visibleRange() (int, int) {
+func (m *Model) bodyRows() int {
+	return max(0, m.height-4)
+}
+
+type column struct {
+	index int
+	width int
+}
+
+func (m *Model) columnLayout() []column {
 	if len(m.widths) == 0 {
-		return 0, 0
+		return nil
 	}
-	start := min(m.scrollCol, len(m.widths)-1)
-	used := rowNumWidth
-	end := start
-	for end < len(m.widths) {
-		avail := m.width - used
-		if avail <= 1 {
+	start := min(max(m.scrollCol, 0), len(m.widths)-1)
+	used := 1 + rowNumWidth + 1
+	out := make([]column, 0, len(m.widths)-start)
+	for c := start; c < len(m.widths); c++ {
+		avail := m.width - used - 1
+		if avail < 1 {
 			break
 		}
-		w := min(m.widths[end], avail-1)
+		w := min(m.widths[c], avail)
+		out = append(out, column{index: c, width: w})
 		used += w + 1
-		end++
 	}
-	if end == start {
-		end = start + 1
+	if len(out) == 0 {
+		w := max(1, m.width-used-1)
+		out = append(out, column{index: start, width: w})
+		used = 1 + rowNumWidth + 1 + w + 1
 	}
-	return start, end
+	if remainder := m.width - used; remainder > 0 {
+		out[len(out)-1].width += remainder
+	}
+	return out
+}
+
+func (m *Model) visibleRange() (int, int) {
+	layout := m.columnLayout()
+	if len(layout) == 0 {
+		return 0, 0
+	}
+	return layout[0].index, layout[len(layout)-1].index + 1
 }
 
 func (m *Model) View() string {
@@ -363,94 +386,141 @@ func (m *Model) View() string {
 	if m.rs == nil {
 		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyResultsPrompt)), m.width, m.height)
 	}
-	if m.height < 2 {
-		return ""
+	if m.height < 4 {
+		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoRows)), m.width, m.height)
 	}
 
 	m.ensureVisible()
+	layout := m.columnLayout()
 	lines := make([]string, 0, m.height)
-	lines = append(lines, m.renderHeader())
+	lines = append(lines, m.borderLine(layout, borderTop))
+	lines = append(lines, m.renderHeader(layout))
+	lines = append(lines, m.borderLine(layout, borderMid))
+
 	if len(m.cells) == 0 {
-		lines = append(lines, textutil.FitLine(theme.Muted.Render("  "+m.t.T(i18n.KeyNoRows)), m.width))
+		if m.bodyRows() > 0 {
+			lines = append(lines, m.messageRow(m.t.T(i18n.KeyNoRows)))
+		}
+	} else {
+		for r := m.scrollRow; r < len(m.cells) && len(lines) < m.height-1; r++ {
+			lines = append(lines, m.renderRow(layout, r, r == m.cursorRow))
+		}
 	}
-	for r := m.scrollRow; r < len(m.cells) && len(lines) < m.height; r++ {
-		lines = append(lines, m.renderRow(r, r == m.cursorRow))
+	for len(lines) < m.height-1 {
+		lines = append(lines, m.emptyRow(layout))
 	}
-	for len(lines) < m.height {
-		lines = append(lines, strings.Repeat(" ", m.width))
-	}
+	lines = append(lines, m.borderLine(layout, borderBottom))
 	return strings.Join(lines, "\n")
 }
 
-func (m *Model) renderHeader() string {
+type borderKind int
+
+const (
+	borderTop borderKind = iota
+	borderMid
+	borderBottom
+)
+
+func (m *Model) borderLine(layout []column, kind borderKind) string {
+	left, join, right := "┌", "┬", "┐"
+	switch kind {
+	case borderMid:
+		left, join, right = "├", "┼", "┤"
+	case borderBottom:
+		left, join, right = "└", "┴", "┘"
+	}
+
 	var b strings.Builder
-	b.WriteString(theme.Header.Render(textutil.FitLine("#", rowNumWidth)))
-	used := rowNumWidth
-	for c := m.scrollCol; c < len(m.widths) && used < m.width; c++ {
-		avail := m.width - used
-		if avail <= 1 {
-			break
+	b.WriteString(left)
+	b.WriteString(strings.Repeat("─", rowNumWidth))
+	if len(layout) == 0 {
+		b.WriteString(right)
+	} else {
+		b.WriteString(join)
+		for i, col := range layout {
+			b.WriteString(strings.Repeat("─", col.width))
+			if i == len(layout)-1 {
+				b.WriteString(right)
+			} else {
+				b.WriteString(join)
+			}
 		}
-		w := min(m.widths[c], avail-1)
-		name := m.rs.Columns[c].Name
-		if c == m.sortCol && m.sortCol >= 0 {
+	}
+	return theme.Muted.Render(textutil.FitLine(b.String(), m.width))
+}
+
+func (m *Model) messageRow(text string) string {
+	inner := max(0, m.width-2)
+	return "│" + theme.Muted.Render(textutil.FitLine(" "+text, inner)) + "│"
+}
+
+func (m *Model) emptyRow(layout []column) string {
+	var b strings.Builder
+	b.WriteString("│")
+	b.WriteString(strings.Repeat(" ", rowNumWidth))
+	b.WriteString("│")
+	for _, col := range layout {
+		b.WriteString(strings.Repeat(" ", col.width))
+		b.WriteString("│")
+	}
+	return b.String()
+}
+
+func (m *Model) renderHeader(layout []column) string {
+	var b strings.Builder
+	b.WriteString("│")
+	b.WriteString(theme.Header.Render(textutil.FitLine("#", rowNumWidth)))
+	b.WriteString("│")
+	for _, col := range layout {
+		name := m.rs.Columns[col.index].Name
+		if col.index == m.sortCol && m.sortCol >= 0 {
 			if m.sortAsc {
 				name += " ↑"
 			} else {
 				name += " ↓"
 			}
 		}
-		b.WriteString(" ")
-		b.WriteString(theme.Header.Render(textutil.FitLine(textutil.Truncate(name, w), w)))
-		used += w + 1
-	}
-	if used < m.width {
-		b.WriteString(strings.Repeat(" ", m.width-used))
+		b.WriteString(theme.Header.Render(textutil.FitLine(" "+name, col.width)))
+		b.WriteString("│")
 	}
 	return b.String()
 }
 
-func (m *Model) renderRow(r int, selected bool) string {
-	var b strings.Builder
-	rowNumStyle := lipgloss.NewStyle()
-	if selected {
-		rowNumStyle = theme.Selected
-	}
+func (m *Model) renderRow(layout []column, r int, selected bool) string {
 	actual := r
 	if r < len(m.order) {
 		actual = m.order[r]
 	}
 	if actual >= len(m.cells) {
-		return ""
+		return m.emptyRow(layout)
 	}
-	b.WriteString(rowNumStyle.Render(fmt.Sprintf("%*d", rowNumWidth, actual+1)))
-	used := rowNumWidth
 	row := m.cells[actual]
-	for c := m.scrollCol; c < len(m.widths) && used < m.width; c++ {
-		avail := m.width - used
-		if avail <= 1 {
-			break
-		}
-		w := min(m.widths[c], avail-1)
+
+	rowNumStyle := lipgloss.NewStyle()
+	if selected {
+		rowNumStyle = theme.Selected
+	}
+
+	var b strings.Builder
+	b.WriteString("│")
+	b.WriteString(rowNumStyle.Render(fmt.Sprintf("%*d", rowNumWidth, actual+1)))
+	b.WriteString("│")
+	for _, col := range layout {
 		text := ""
-		if c < len(row) {
-			text = row[c]
+		if col.index < len(row) {
+			text = row[col.index]
 		}
 		style := lipgloss.NewStyle()
 		switch {
-		case selected && c == m.cursorCol:
+		case selected && col.index == m.cursorCol:
 			style = theme.CellCursor
 		case selected:
 			style = theme.Selected
 		case text == nullText:
 			style = theme.Null
 		}
-		b.WriteString(" ")
-		b.WriteString(style.Render(textutil.FitLine(textutil.Truncate(text, w), w)))
-		used += w + 1
-	}
-	if used < m.width {
-		b.WriteString(strings.Repeat(" ", m.width-used))
+		b.WriteString(style.Render(textutil.FitLine(" "+text, col.width)))
+		b.WriteString("│")
 	}
 	return b.String()
 }
