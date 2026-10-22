@@ -135,6 +135,10 @@ type Model struct {
 
 	focus focus
 
+	focusMode  string
+	zoom       bool
+	autoPaused bool
+
 	conn     db.Conn
 	connName string
 	executor query.Executor
@@ -161,6 +165,10 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 		themeName = saved
 	}
 	m.themeName = theme.Set(themeName)
+	m.focusMode = cfg.UI.FocusMode
+	if m.focusMode != config.FocusModeAuto {
+		m.focusMode = config.FocusModeManual
+	}
 	if err := config.MergeRuntime(cfg); err != nil {
 		m.setStatus(t.T(i18n.KeyErrorLoadConnections, err), true)
 	}
@@ -326,12 +334,27 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
 		return nil
 	}
 	x, y := msg.X, msg.Y
+	if m.effectiveZoom() {
+		if y < 0 || y >= m.height-2 {
+			return nil
+		}
+		switch m.focus {
+		case focusEditor:
+			return m.editor.Focus()
+		case focusResults:
+			m.results.HandleClick(x, y-1)
+		default:
+			return m.sidebar.HandleClick(y - 1)
+		}
+		return nil
+	}
 	if x < m.sideW {
 		if y < 0 || y >= m.height-2 {
 			return nil
 		}
 		m.editor.Blur()
 		m.focus = focusSidebar
+		m.layout()
 		if y == 0 {
 			return nil
 		}
@@ -346,10 +369,12 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	switch {
 	case y >= 0 && y < m.editorH:
 		m.focus = focusEditor
+		m.layout()
 		return m.editor.Focus()
 	case y >= m.editorH+1 && y < m.editorH+1+m.resultsH:
 		m.editor.Blur()
 		m.focus = focusResults
+		m.layout()
 		relY := y - (m.editorH + 2)
 		if relY >= 0 {
 			m.results.HandleClick(relX, relY)
@@ -378,6 +403,16 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		return nil
 	}
 	if m.anyOverlayOpen() {
+		return nil
+	}
+
+	if m.effectiveZoom() {
+		switch m.focus {
+		case focusResults:
+			m.results.Scroll(delta)
+		case focusSidebar:
+			m.sidebar.Scroll(delta)
+		}
 		return nil
 	}
 
@@ -461,6 +496,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.options.Open("", m.menuItems())
 		return nil
 	}
+	if key == "f2" {
+		m.toggleZoom()
+		return nil
+	}
 	if key == "q" && m.focus != focusEditor {
 		m.shutdown()
 		return tea.Quit
@@ -528,6 +567,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.exportCmd("json")
 		case "ctrl+m":
 			return m.exportCmd("md")
+		case "enter", "v":
+			text := m.results.CursorText()
+			if text == "" {
+				return nil
+			}
+			title := fmt.Sprintf(m.t.T(i18n.KeyCellTitle), m.results.CursorColumnName())
+			m.textView.Open(title, text)
+			return nil
 		case "c":
 			text := m.results.CursorCell()
 			if text == "" {
@@ -548,10 +595,31 @@ func (m *Model) cycleFocus(delta int) tea.Cmd {
 	m.completion.Close()
 	m.focus = focus((int(m.focus) + delta + count) % count)
 	m.editor.Blur()
+	var cmd tea.Cmd
 	if m.focus == focusEditor {
-		return m.editor.Focus()
+		cmd = m.editor.Focus()
 	}
-	return nil
+	m.layout()
+	return cmd
+}
+
+func (m *Model) effectiveZoom() bool {
+	if m.focusMode == config.FocusModeAuto {
+		if m.autoPaused {
+			return false
+		}
+		return m.focus != focusSidebar
+	}
+	return m.zoom
+}
+
+func (m *Model) toggleZoom() {
+	if m.focusMode == config.FocusModeAuto {
+		m.autoPaused = !m.autoPaused
+	} else {
+		m.zoom = !m.zoom
+	}
+	m.layout()
 }
 
 func (m *Model) connectCmd(name string) tea.Cmd {
@@ -624,7 +692,7 @@ func (m *Model) runQuery() tea.Cmd {
 	m.editor.AddHistory(stmt)
 	if store := m.history; store != nil {
 		store.Add(stmt)
-		go func() { _ = store.Save() }()
+		_ = store.Save()
 	}
 	m.setStatus(m.t.T(i18n.KeyStatusRunning), false)
 
@@ -687,6 +755,7 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
 	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(msg.Schema, msg.Table)))
 	m.focus = focusEditor
+	m.layout()
 	return m.editor.Focus()
 }
 
@@ -700,6 +769,7 @@ func qualifiedTable(schema, table string) string {
 func (m *Model) tableData(schema, table string) tea.Cmd {
 	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(schema, table)))
 	m.focus = focusEditor
+	m.layout()
 	focus := m.editor.Focus()
 	run := m.runQuery()
 	return tea.Batch(focus, run)
@@ -815,18 +885,39 @@ func (m *Model) layout() {
 		return
 	}
 	mainH := m.height - 2
-	sideW := m.width / 4
-	if sideW < 22 {
-		sideW = 22
+	if m.effectiveZoom() {
+		switch m.focus {
+		case focusEditor:
+			m.sideW, m.rightW = 0, m.width
+			m.editorH, m.resultsH = mainH, 0
+		case focusResults:
+			m.sideW, m.rightW = 0, m.width
+			m.editorH, m.resultsH = 0, mainH
+		default:
+			m.sideW, m.rightW = m.width, 0
+			m.editorH, m.resultsH = 0, 0
+		}
+		m.sidebar.SetSize(max(1, m.sideW), mainH)
+		m.editor.SetSize(max(1, m.rightW), max(1, m.editorH-1))
+		m.results.SetSize(max(1, m.rightW), max(1, m.resultsH-1))
+		return
 	}
-	if sideW > 36 {
-		sideW = 36
+
+	sideW := m.width / 4
+	if sideW < 25 {
+		sideW = 25
 	}
 	if m.width < 70 {
 		sideW = m.width / 3
 	}
-	if sideW > m.width-10 {
-		sideW = m.width - 10
+	if preferred := m.sidebar.PreferredWidth(); sideW < preferred {
+		sideW = preferred
+	}
+	if sideW > 40 {
+		sideW = 40
+	}
+	if sideW > m.width-20 {
+		sideW = m.width - 20
 	}
 	rightW := m.width - sideW - 1
 
@@ -886,12 +977,24 @@ func (m *Model) renderMain() string {
 	}
 
 	mainH := m.height - 2
-	side := renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.sideW, mainH)
-	editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.editor.View(), m.rightW, m.editorH)
-	resultsView := renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.rightW, m.resultsH)
-	right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
-	separator := strings.Repeat("│\n", mainH-1) + "│"
-	body := lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
+	var body string
+	if m.effectiveZoom() {
+		switch m.focus {
+		case focusEditor:
+			body = renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.editor.View(), m.width, mainH)
+		case focusResults:
+			body = renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.width, mainH)
+		default:
+			body = renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.width, mainH)
+		}
+	} else {
+		side := renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.sideW, mainH)
+		editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.editor.View(), m.rightW, m.editorH)
+		resultsView := renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.rightW, m.resultsH)
+		right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
+		separator := strings.Repeat("│\n", mainH-1) + "│"
+		body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
+	}
 
 	m.statusbar.Width = m.width
 	m.statusbar.Left = m.statusLeft()
@@ -962,6 +1065,8 @@ func (m *Model) runMenuAction(msg menu.ActionMsg) tea.Cmd {
 		return m.exportCmd("md")
 	case "help":
 		m.showHelp = true
+	case "zoom":
+		m.toggleZoom()
 	case "quit":
 		m.shutdown()
 		return tea.Quit
@@ -1064,6 +1169,7 @@ func (m *Model) menuItems() []menu.Item {
 		{ID: "lang", LabelKey: i18n.KeyMenuLanguage, Kind: menu.KindChoice, Choices: langs, Value: langValue},
 		{ID: "timeout", LabelKey: i18n.KeyMenuTimeout, Kind: menu.KindChoice, Choices: timeoutLabels(), Value: timeoutValue},
 		{ID: "maxrows", LabelKey: i18n.KeyMenuMaxRows, Kind: menu.KindChoice, Choices: maxRowLabels(), Value: rowValue},
+		{ID: "zoom", LabelKey: i18n.KeyMenuLayout, Kind: menu.KindAction},
 		{Kind: menu.KindHeader},
 		{ID: "quit", LabelKey: i18n.KeyCmdQuit, Kind: menu.KindAction},
 	}

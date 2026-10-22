@@ -1,7 +1,10 @@
 package sidebar
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/linduan/bdb/internal/config"
 	"github.com/linduan/bdb/internal/i18n"
@@ -20,6 +23,36 @@ func TestHandleClickConnects(t *testing.T) {
 	msg, ok := cmd().(ConnectMsg)
 	if !ok || msg.Name != "local" {
 		t.Fatalf("message = %#v", cmd())
+	}
+}
+
+func TestConnectionIconsAndAlignment(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "a", Type: config.TypeSQLite, Path: "a.db"},
+		{Name: "long-connection", Type: config.TypePostgres, Host: "h", User: "u", Database: "d"},
+	}, i18n.New("en"))
+	m.SetSize(40, 10)
+
+	view := ansi.Strip(m.View())
+	lines := strings.Split(view, "\n")
+	sqliteCol, postgresCol := -1, -1
+	for _, line := range lines {
+		if idx := strings.Index(line, "sqlite"); idx >= 0 {
+			sqliteCol = ansi.StringWidth(line[:idx])
+		}
+		if idx := strings.Index(line, "postgres"); idx >= 0 {
+			postgresCol = ansi.StringWidth(line[:idx])
+		}
+	}
+	if sqliteCol < 0 || postgresCol < 0 {
+		t.Fatalf("types not rendered:\n%s", view)
+	}
+	if sqliteCol != postgresCol {
+		t.Fatalf("type columns: sqlite=%d postgres=%d\n%s", sqliteCol, postgresCol, view)
+	}
+	if !strings.Contains(view, typeIcon(config.TypeSQLite)) ||
+		!strings.Contains(view, typeIcon(config.TypePostgres)) {
+		t.Fatalf("icons missing:\n%s", view)
 	}
 }
 

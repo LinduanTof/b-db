@@ -5,6 +5,8 @@ ui:
   language: auto
   # default | dracula | gruvbox | nord | catppuccin | solarized-light
   theme: default
+  # manual | auto: F2 focuses the active pane; auto follows focus
+  focus_mode: manual
 
 query:
   timeout: 30s

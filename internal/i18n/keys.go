@@ -38,6 +38,7 @@ const (
 	KeyMenuLanguage       = "menu.language"
 	KeyMenuTimeout        = "menu.timeout"
 	KeyMenuMaxRows        = "menu.maxrows"
+	KeyMenuLayout         = "menu.layout"
 
 	KeyTableData         = "table.data"
 	KeyTableDDL          = "table.ddl"
@@ -49,6 +50,7 @@ const (
 	KeyTextViewHint      = "textview.hint"
 	KeyErrorDDL          = "error.ddl"
 	KeyErrorIndexes      = "error.indexes"
+	KeyCellTitle         = "cell.title"
 	KeyHelpTitle         = "help.title"
 	KeyHelpGlobal        = "help.global"
 	KeyHelpSidebar       = "help.sidebar"

@@ -54,6 +54,18 @@ var functions = []string{
 	"JSON_EXTRACT", "ARRAY_AGG", "STRING_AGG",
 }
 
+func Keywords() []string {
+	out := make([]string, len(keywords))
+	copy(out, keywords)
+	return out
+}
+
+func Functions() []string {
+	out := make([]string, len(functions))
+	copy(out, functions)
+	return out
+}
+
 type Engine struct {
 	mu      sync.RWMutex
 	tables  []string

@@ -392,31 +392,40 @@ func (m *Model) View() string {
 	}
 
 	lines := make([]string, 0, m.height)
+	labelWidth := m.connectionLabelWidth()
 	for i := m.offset; i < len(m.flat) && len(lines) < m.height; i++ {
-		lines = append(lines, m.renderNode(m.flat[i], i == m.cursor))
+		lines = append(lines, m.renderNode(m.flat[i], i == m.cursor, labelWidth))
 	}
 	return textutil.FitLines(strings.Join(lines, "\n"), m.width, m.height)
 }
 
-func (m *Model) renderNode(n *Node, selected bool) string {
-	icon := "  "
+func (m *Model) connectionLabelWidth() int {
+	width := 0
+	for _, root := range m.roots {
+		width = max(width, textutil.Width(root.Label))
+	}
+	return max(width, 8)
+}
+
+func (m *Model) renderNode(n *Node, selected bool, labelWidth int) string {
+	indent := strings.Repeat("  ", n.Depth)
+	var text string
 	switch n.Kind {
 	case KindConnection:
+		status := "○"
 		if n.ConnName == m.connName {
-			icon = "● "
-		} else {
-			icon = "○ "
+			status = "●"
 		}
+		text = indent + status + " " + pad(typeIcon(n.Sub), 2) + " " + pad(n.Label, labelWidth)
 	case KindSchema, KindTable:
+		marker := "▸"
 		if n.Expanded {
-			icon = "▾ "
-		} else {
-			icon = "▸ "
+			marker = "▾"
 		}
+		text = indent + marker + " " + n.Label
 	case KindColumn:
-		icon = "· "
+		text = indent + "· " + n.Label
 	}
-	text := strings.Repeat("  ", n.Depth) + icon + n.Label
 	if n.Sub != "" {
 		text += "  " + n.Sub
 	}
@@ -431,6 +440,39 @@ func (m *Model) renderNode(n *Node, selected bool) string {
 		return theme.Muted.Render(text)
 	}
 	return text
+}
+
+func (m *Model) PreferredWidth() int {
+	labelWidth := m.connectionLabelWidth()
+	subWidth := 0
+	for _, root := range m.roots {
+		subWidth = max(subWidth, textutil.Width(root.Sub))
+	}
+	return 5 + labelWidth + 2 + subWidth
+}
+
+func typeIcon(typ string) string {
+	switch typ {
+	case config.TypePostgres:
+		return "◉"
+	case config.TypeMySQL:
+		return "◈"
+	case config.TypeSQLite:
+		return "▣"
+	case config.TypeRedis:
+		return "◇"
+	case config.TypeMongo:
+		return "◍"
+	default:
+		return "▤"
+	}
+}
+
+func pad(s string, width int) string {
+	if d := width - textutil.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
+	}
+	return s
 }
 
 func loadSchemas(conn db.Conn, node *Node) tea.Cmd {

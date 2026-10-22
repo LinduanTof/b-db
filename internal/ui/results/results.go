@@ -170,6 +170,10 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.sortCol = -1
 		m.sortAsc = true
 		m.resetOrder()
+	case "H":
+		m.ScrollHorizontal(-1)
+	case "L":
+		m.ScrollHorizontal(1)
 	}
 	m.ensureVisible()
 	return *m, nil
@@ -193,7 +197,17 @@ func (m *Model) adjustWidth(delta int) {
 	if m.cursorCol < 0 || m.cursorCol >= len(m.widths) {
 		return
 	}
-	m.widths[m.cursorCol] = min(max(m.widths[m.cursorCol]+delta, minColWidth), 80)
+	m.widths[m.cursorCol] = min(max(m.widths[m.cursorCol]+delta, minColWidth), 120)
+	m.ensureVisible()
+}
+
+func (m *Model) ScrollHorizontal(delta int) {
+	if len(m.widths) == 0 {
+		return
+	}
+	step := max(1, len(m.columnLayout()))
+	m.scrollCol = min(max(m.scrollCol+delta*step, 0), len(m.widths)-1)
+	m.cursorCol = m.scrollCol
 	m.ensureVisible()
 }
 
@@ -303,6 +317,42 @@ func (m Model) CursorCell() string {
 }
 
 func (m Model) CursorPosition() (row, col int) { return m.cursorRow, m.cursorCol }
+
+func (m Model) CursorColumnName() string {
+	if m.rs == nil || m.cursorCol < 0 || m.cursorCol >= len(m.rs.Columns) {
+		return ""
+	}
+	return m.rs.Columns[m.cursorCol].Name
+}
+
+func (m Model) CursorText() string {
+	if m.rs == nil || len(m.cells) == 0 || len(m.widths) == 0 || m.cursorRow >= len(m.cells) {
+		return ""
+	}
+	row := m.cursorRow
+	if row < len(m.order) {
+		row = m.order[row]
+	}
+	if row >= len(m.rs.Rows) || m.cursorCol >= len(m.rs.Rows[row]) {
+		return ""
+	}
+	return rawText(m.rs.Rows[row][m.cursorCol])
+}
+
+func rawText(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return nullText
+	case string:
+		return x
+	case []byte:
+		return string(x)
+	case time.Time:
+		return x.Format(time.RFC3339Nano)
+	default:
+		return fmt.Sprint(x)
+	}
+}
 
 func (m *Model) HandleClick(x, y int) bool {
 	if y < 3 || len(m.cells) == 0 {

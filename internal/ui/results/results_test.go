@@ -177,6 +177,39 @@ func TestHandleClick(t *testing.T) {
 	}
 }
 
+func TestCursorTextAndHorizontalScroll(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(50, 10)
+	m.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{
+			{Name: "id"}, {Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "note"},
+		},
+		Rows: [][]any{{int64(1), "a1", "b1", "c1", "line1\nline2"}},
+	})
+
+	m.cursorCol = 4
+	if got := m.CursorText(); got != "line1\nline2" {
+		t.Fatalf("cursor text = %q", got)
+	}
+	if got := m.CursorColumnName(); got != "note" {
+		t.Fatalf("column = %q", got)
+	}
+
+	m.cursorCol = 0
+	m.ScrollHorizontal(1)
+	first := m.scrollCol
+	if first == 0 {
+		t.Fatal("horizontal scroll should move the viewport")
+	}
+	if m.cursorCol != first {
+		t.Fatalf("cursorCol = %d, scrollCol = %d", m.cursorCol, m.scrollCol)
+	}
+	m.ScrollHorizontal(-1)
+	if m.scrollCol >= first {
+		t.Fatalf("left scroll did not move back: %d -> %d", first, m.scrollCol)
+	}
+}
+
 func TestScroll(t *testing.T) {
 	m := New(i18n.New("en"))
 	m.SetSize(60, 12)

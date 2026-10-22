@@ -103,6 +103,35 @@ connections:
 	}
 }
 
+func TestFocusModeDefaults(t *testing.T) {
+	path := writeConfig(t, "connections: []")
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.FocusMode != FocusModeManual {
+		t.Fatalf("focus_mode = %q, want manual", cfg.UI.FocusMode)
+	}
+
+	path = writeConfig(t, "ui:\n  focus_mode: auto\nconnections: []")
+	cfg, _, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.FocusMode != FocusModeAuto {
+		t.Fatalf("focus_mode = %q, want auto", cfg.UI.FocusMode)
+	}
+
+	path = writeConfig(t, "ui:\n  focus_mode: nonsense\nconnections: []")
+	cfg, _, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UI.FocusMode != FocusModeManual {
+		t.Fatalf("invalid focus_mode should fall back to manual, got %q", cfg.UI.FocusMode)
+	}
+}
+
 func TestMySQLDatabaseOptional(t *testing.T) {
 	cfg := &Config{Connections: []Connection{
 		{Name: "m", Type: TypeMySQL, Host: "127.0.0.1", User: "root"},

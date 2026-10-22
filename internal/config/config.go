@@ -22,6 +22,11 @@ const (
 )
 
 const (
+	FocusModeManual = "manual"
+	FocusModeAuto   = "auto"
+)
+
+const (
 	defaultTimeout = 30 * time.Second
 	defaultMaxRows = 1000
 )
@@ -51,8 +56,9 @@ type Config struct {
 }
 
 type UIConfig struct {
-	Language string `yaml:"language"`
-	Theme    string `yaml:"theme"`
+	Language  string `yaml:"language"`
+	Theme     string `yaml:"theme"`
+	FocusMode string `yaml:"focus_mode"`
 }
 
 type QueryConfig struct {
@@ -131,6 +137,11 @@ func (c *Config) applyDefaults() {
 	}
 	if c.UI.Theme == "" {
 		c.UI.Theme = "default"
+	}
+	switch c.UI.FocusMode {
+	case FocusModeManual, FocusModeAuto:
+	default:
+		c.UI.FocusMode = FocusModeManual
 	}
 	if c.Query.Timeout <= 0 {
 		c.Query.Timeout = Duration(defaultTimeout)

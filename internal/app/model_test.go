@@ -21,6 +21,10 @@ import (
 )
 
 func testModel(t *testing.T, lang string) *Model {
+	return testModelWithFocus(t, lang, config.FocusModeManual)
+}
+
+func testModelWithFocus(t *testing.T, lang, focusMode string) *Model {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dbPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "demo.db"))
@@ -29,7 +33,7 @@ func testModel(t *testing.T, lang string) *Model {
 	}
 	cfg := &config.Config{
 		DefaultConnection: "local-sqlite",
-		UI:                config.UIConfig{Language: lang},
+		UI:                config.UIConfig{Language: lang, FocusMode: focusMode},
 		Query:             config.QueryConfig{Timeout: config.Duration(5 * time.Second), MaxRows: 100},
 		Connections: []config.Connection{
 			{Name: "local-sqlite", Type: config.TypeSQLite, Path: dbPath},
@@ -584,6 +588,154 @@ func TestMouseClickResults(t *testing.T) {
 	m = model.(*Model)
 	if row, _ := m.results.CursorPosition(); row != 3 {
 		t.Fatalf("wheel row = %d, want 3", row)
+	}
+}
+
+func TestManualZoomLayout(t *testing.T) {
+	m := testModel(t, "en")
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyF2})
+	content := m.View().Content
+	if strings.Contains(content, "SQL") || strings.Contains(content, "Results") {
+		t.Fatalf("sidebar zoom should hide other panes:\n%s", content)
+	}
+	if got := strings.Count(content, "\n") + 1; got != 30 {
+		t.Fatalf("lines = %d, want 30", got)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	content = m.View().Content
+	if strings.Contains(content, "Connections") || strings.Contains(content, "Results") {
+		t.Fatalf("editor zoom should hide other panes:\n%s", content)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	content = m.View().Content
+	if strings.Contains(content, "Connections") || strings.Contains(content, "SQL") {
+		t.Fatalf("results zoom should hide other panes:\n%s", content)
+	}
+	if !strings.Contains(content, "Results") {
+		t.Fatalf("results title missing:\n%s", content)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyF2})
+	content = m.View().Content
+	for _, want := range []string{"Connections", "SQL", "Results"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("split layout missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestAutoFocusLayout(t *testing.T) {
+	m := testModelWithFocus(t, "en", config.FocusModeAuto)
+
+	content := m.View().Content
+	for _, want := range []string{"Connections", "SQL", "Results"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("initial split missing %q:\n%s", want, content)
+		}
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	content = m.View().Content
+	if strings.Contains(content, "Connections") || strings.Contains(content, "Results") {
+		t.Fatalf("editor should auto zoom:\n%s", content)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	content = m.View().Content
+	if strings.Contains(content, "Connections") || strings.Contains(content, "SQL") {
+		t.Fatalf("results should auto zoom:\n%s", content)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	content = m.View().Content
+	if !strings.Contains(content, "Connections") || !strings.Contains(content, "SQL") {
+		t.Fatalf("sidebar focus should restore split layout:\n%s", content)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyF2})
+	content = m.View().Content
+	if !strings.Contains(content, "Connections") || !strings.Contains(content, "Results") {
+		t.Fatalf("F2 should pause auto zoom:\n%s", content)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyF2})
+	content = m.View().Content
+	if strings.Contains(content, "Connections") {
+		t.Fatalf("F2 should resume auto zoom:\n%s", content)
+	}
+}
+
+func TestMenuFocusLayout(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	for i := 0; i < 10; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.zoom {
+		t.Fatal("menu action should enable focused layout")
+	}
+	if m.options.IsOpen() {
+		t.Fatal("menu should close after the action")
+	}
+}
+
+func TestMouseClickZoomResults(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m.editor.SetValue("SELECT id, name FROM users ORDER BY id;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+
+	m.focus = focusResults
+	m.zoom = true
+	m.layout()
+
+	model, _ = m.Update(tea.MouseClickMsg{X: 7, Y: 4, Button: tea.MouseLeft})
+	m = model.(*Model)
+	row, col := m.results.CursorPosition()
+	if row != 0 || col != 0 {
+		t.Fatalf("cursor = %d,%d, want 0,0", row, col)
+	}
+}
+
+func TestViewFullCell(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m.editor.SetValue("SELECT 'hello world' AS note;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+
+	m.focus = focusEditor
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.textView.IsOpen() {
+		t.Fatalf("cell viewer should open, focus=%v status=%s", m.focus, m.status)
+	}
+	content := m.View().Content
+	if !strings.Contains(content, "Cell: note") || !strings.Contains(content, "hello world") {
+		t.Fatalf("cell view:\n%s", content)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.textView.IsOpen() {
+		t.Fatal("esc should close the cell viewer")
 	}
 }
 
