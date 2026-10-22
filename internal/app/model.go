@@ -16,6 +16,7 @@ import (
 	ac "github.com/linduan-guan/b-db/internal/complete"
 	"github.com/linduan-guan/b-db/internal/config"
 	"github.com/linduan-guan/b-db/internal/db"
+	_ "github.com/linduan-guan/b-db/internal/db/mongo"
 	_ "github.com/linduan-guan/b-db/internal/db/redis"
 	_ "github.com/linduan-guan/b-db/internal/db/sql"
 	"github.com/linduan-guan/b-db/internal/export"
@@ -723,7 +724,11 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	}
 	m.conn = msg.conn
 	m.connName = msg.name
-	m.executor = query.Executor{Conn: m.conn, MaxRows: m.cfg.Query.MaxRows, AlwaysQuery: m.conn.Type() == "redis"}
+	m.executor = query.Executor{
+		Conn:        m.conn,
+		MaxRows:     m.cfg.Query.MaxRows,
+		AlwaysQuery: m.conn.Type() == "redis" || m.conn.Type() == "mongo",
+	}
 	m.editCache = map[string]editInfo{}
 	m.editTarget = editTarget{}
 	m.setStatus(m.t.T(i18n.KeyStatusConnected, msg.name), false)
@@ -835,10 +840,27 @@ func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
 		m.layout()
 		return m.editor.Focus()
 	}
+	if m.conn != nil && m.conn.Type() == "mongo" {
+		m.editor.SetValue(mongoCommand(msg.Schema, msg.Table))
+		m.focus = focusEditor
+		m.layout()
+		return m.editor.Focus()
+	}
 	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(msg.Schema, msg.Table)))
 	m.focus = focusEditor
 	m.layout()
 	return m.editor.Focus()
+}
+
+func mongoCommand(schema, table string) string {
+	return "find " + schema + "." + table + " {}"
+}
+
+func (m *Model) mongoTableData(schema, table string) tea.Cmd {
+	m.editor.SetValue(mongoCommand(schema, table))
+	m.focus = focusResults
+	m.layout()
+	return m.runQuery()
 }
 
 func redisCommand(kind, key string) string {
@@ -896,6 +918,14 @@ func (m *Model) tableMenuItems() []menu.Item {
 			{ID: "table.select", LabelKey: i18n.KeyTableSelect, Kind: menu.KindAction},
 		}
 	}
+	if m.conn != nil && m.conn.Type() == "mongo" {
+		return []menu.Item{
+			{ID: "table.data", LabelKey: i18n.KeyTableData, Kind: menu.KindAction},
+			{ID: "table.structure", LabelKey: i18n.KeyTableStructure, Kind: menu.KindAction},
+			{ID: "table.indexes", LabelKey: i18n.KeyTableIndexes, Kind: menu.KindAction},
+			{ID: "table.select", LabelKey: i18n.KeyTableSelect, Kind: menu.KindAction},
+		}
+	}
 	return []menu.Item{
 		{ID: "table.data", LabelKey: i18n.KeyTableData, Kind: menu.KindAction},
 		{ID: "table.ddl", LabelKey: i18n.KeyTableDDL, Kind: menu.KindAction},
@@ -917,6 +947,14 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 		}
 		m.setStatus(m.t.T(i18n.KeyErrorUnsupportedFeature, "redis"), true)
 		return nil
+	}
+	if m.conn != nil && m.conn.Type() == "mongo" {
+		switch msg.ID {
+		case "table.data":
+			return m.mongoTableData(schema, table)
+		case "table.select":
+			return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table, Kind: m.tableMenuKind})
+		}
 	}
 	switch msg.ID {
 	case "table.data":

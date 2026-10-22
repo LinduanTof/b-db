@@ -8,7 +8,8 @@ import (
 	"github.com/linduan-guan/b-db/internal/db"
 )
 
-func splitCommand(input string) ([]string, error) {	var out []string
+func splitCommand(input string) ([]string, error) {
+	var out []string
 	var current strings.Builder
 	var quote rune
 	escaped := false
