@@ -13,8 +13,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
-	"github.com/linduan/bdb/internal/db"
-	"github.com/linduan/bdb/internal/db/dialect"
+	"github.com/linduan-guan/b-db/internal/db"
+	"github.com/linduan-guan/b-db/internal/db/dialect"
 )
 
 func init() {

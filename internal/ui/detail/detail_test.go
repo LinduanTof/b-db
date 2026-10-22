@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/linduan/bdb/internal/db"
-	"github.com/linduan/bdb/internal/i18n"
+	"github.com/linduan-guan/b-db/internal/db"
+	"github.com/linduan-guan/b-db/internal/i18n"
 )
 
 func TestRenderAndScroll(t *testing.T) {

@@ -8,10 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/linduan/bdb/internal/app"
-	"github.com/linduan/bdb/internal/config"
-	"github.com/linduan/bdb/internal/history"
-	"github.com/linduan/bdb/internal/i18n"
+	"github.com/linduan-guan/b-db/internal/app"
+	"github.com/linduan-guan/b-db/internal/config"
+	"github.com/linduan-guan/b-db/internal/history"
+	"github.com/linduan-guan/b-db/internal/i18n"
 )
 
 func main() {

@@ -10,14 +10,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/linduan/bdb/internal/config"
-	"github.com/linduan/bdb/internal/history"
-	"github.com/linduan/bdb/internal/i18n"
-	uicomplete "github.com/linduan/bdb/internal/ui/complete"
-	"github.com/linduan/bdb/internal/ui/connection"
-	"github.com/linduan/bdb/internal/ui/menu"
-	"github.com/linduan/bdb/internal/ui/sidebar"
-	"github.com/linduan/bdb/internal/ui/theme"
+	"github.com/linduan-guan/b-db/internal/config"
+	"github.com/linduan-guan/b-db/internal/history"
+	"github.com/linduan-guan/b-db/internal/i18n"
+	uicomplete "github.com/linduan-guan/b-db/internal/ui/complete"
+	"github.com/linduan-guan/b-db/internal/ui/connection"
+	"github.com/linduan-guan/b-db/internal/ui/menu"
+	"github.com/linduan-guan/b-db/internal/ui/sidebar"
+	"github.com/linduan-guan/b-db/internal/ui/theme"
 )
 
 func testModel(t *testing.T, lang string) *Model {

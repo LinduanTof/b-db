@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/linduan/bdb/internal/db"
+	"github.com/linduan-guan/b-db/internal/db"
 )
 
 func CSV(w io.Writer, rs *db.ResultSet) error {

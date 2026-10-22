@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/linduan/bdb/internal/db"
+	"github.com/linduan-guan/b-db/internal/db"
 )
 
 type catalog struct{ c *conn }

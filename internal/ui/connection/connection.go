@@ -9,10 +9,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/linduan/bdb/internal/config"
-	"github.com/linduan/bdb/internal/i18n"
-	"github.com/linduan/bdb/internal/ui/textutil"
-	"github.com/linduan/bdb/internal/ui/theme"
+	"github.com/linduan-guan/b-db/internal/config"
+	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/linduan-guan/b-db/internal/ui/textutil"
+	"github.com/linduan-guan/b-db/internal/ui/theme"
 )
 
 type SubmittedMsg struct {
