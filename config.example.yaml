@@ -3,6 +3,8 @@ default_connection: local-sqlite
 ui:
   # auto | en | zh
   language: auto
+  # default | dracula | gruvbox | nord | catppuccin | solarized-light
+  theme: default
 
 query:
   timeout: 30s

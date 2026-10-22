@@ -2,6 +2,7 @@ package editor
 
 import (
 	"strings"
+	"unicode"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -36,6 +37,35 @@ func (m *Model) Focus() tea.Cmd { return m.ta.Focus() }
 func (m *Model) Blur() { m.ta.Blur() }
 
 func (m Model) Value() string { return m.ta.Value() }
+
+func (m Model) WordBeforeCursor() (string, int) {
+	line := m.ta.Line()
+	column := m.ta.Column()
+	lines := strings.Split(m.ta.Value(), "\n")
+	if line < 0 || line >= len(lines) {
+		return "", 0
+	}
+	runes := []rune(lines[line])
+	if column > len(runes) {
+		column = len(runes)
+	}
+	start := column
+	for start > 0 && isWordRune(runes[start-1]) {
+		start--
+	}
+	return string(runes[start:column]), column - start
+}
+
+func (m *Model) ReplaceBeforeCursor(prefixLen int, text string) {
+	for i := 0; i < prefixLen; i++ {
+		m.ta, _ = m.ta.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	m.ta.InsertString(text)
+}
+
+func isWordRune(r rune) bool {
+	return r == '_' || r == '.' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
 
 func (m *Model) SetValue(s string) {
 	m.ta.SetValue(s)

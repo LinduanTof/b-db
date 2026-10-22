@@ -122,6 +122,21 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 	return nil
 }
 
+func (m *Model) AddConnection(c config.Connection) {
+	for _, root := range m.roots {
+		if root.ConnName == c.Name {
+			return
+		}
+	}
+	m.roots = append(m.roots, &Node{
+		Kind:     KindConnection,
+		Label:    c.Name,
+		Sub:      c.Type,
+		ConnName: c.Name,
+	})
+	m.rebuild()
+}
+
 func (m *Model) SelectedTable() (schema, table string, ok bool) {
 	n := m.selected()
 	if n == nil || n.Kind != KindTable {

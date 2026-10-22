@@ -52,6 +52,7 @@ type Config struct {
 
 type UIConfig struct {
 	Language string `yaml:"language"`
+	Theme    string `yaml:"theme"`
 }
 
 type QueryConfig struct {
@@ -128,6 +129,9 @@ func (c *Config) applyDefaults() {
 	if c.UI.Language == "" {
 		c.UI.Language = "auto"
 	}
+	if c.UI.Theme == "" {
+		c.UI.Theme = "default"
+	}
 	if c.Query.Timeout <= 0 {
 		c.Query.Timeout = Duration(defaultTimeout)
 	}
@@ -158,31 +162,67 @@ func expand(connName, field, value string) (string, error) {
 	return out, nil
 }
 
+func (c *Connection) expandEnv() error {
+	fields := []struct {
+		name string
+		ptr  *string
+	}{
+		{"name", &c.Name},
+		{"type", &c.Type},
+		{"host", &c.Host},
+		{"user", &c.User},
+		{"password", &c.Password},
+		{"database", &c.Database},
+		{"sslmode", &c.SSLMode},
+		{"path", &c.Path},
+		{"addr", &c.Addr},
+		{"uri", &c.URI},
+	}
+	for _, f := range fields {
+		v, err := expand(c.Name, f.name, *f.ptr)
+		if err != nil {
+			return err
+		}
+		*f.ptr = v
+	}
+	return nil
+}
+
 func (c *Config) expandEnv() error {
 	for i := range c.Connections {
-		conn := &c.Connections[i]
-		fields := []struct {
-			name string
-			ptr  *string
-		}{
-			{"name", &conn.Name},
-			{"type", &conn.Type},
-			{"host", &conn.Host},
-			{"user", &conn.User},
-			{"password", &conn.Password},
-			{"database", &conn.Database},
-			{"sslmode", &conn.SSLMode},
-			{"path", &conn.Path},
-			{"addr", &conn.Addr},
-			{"uri", &conn.URI},
+		if err := c.Connections[i].expandEnv(); err != nil {
+			return err
 		}
-		for _, f := range fields {
-			v, err := expand(conn.Name, f.name, *f.ptr)
-			if err != nil {
-				return err
-			}
-			*f.ptr = v
+	}
+	return nil
+}
+
+func (c Connection) validate() error {
+	if c.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if c.Port < 0 || c.Port > 65535 {
+		return fmt.Errorf("invalid port %d", c.Port)
+	}
+	switch c.Type {
+	case TypePostgres, TypeMySQL:
+		if c.Host == "" || c.User == "" || c.Database == "" {
+			return fmt.Errorf("host, user and database are required for %s", c.Type)
 		}
+	case TypeSQLite:
+		if c.Path == "" {
+			return fmt.Errorf("path is required for sqlite")
+		}
+	case TypeRedis:
+		if c.Addr == "" {
+			return fmt.Errorf("addr is required for redis")
+		}
+	case TypeMongo:
+		if c.URI == "" && c.Host == "" {
+			return fmt.Errorf("uri or host is required for mongo")
+		}
+	default:
+		return fmt.Errorf("unsupported type %q", c.Type)
 	}
 	return nil
 }
@@ -190,36 +230,16 @@ func (c *Config) expandEnv() error {
 func (c *Config) Validate() error {
 	seen := make(map[string]bool, len(c.Connections))
 	for i, conn := range c.Connections {
-		if conn.Name == "" {
-			return fmt.Errorf("connections[%d]: name is required", i)
+		if err := conn.validate(); err != nil {
+			if conn.Name == "" {
+				return fmt.Errorf("connections[%d]: %w", i, err)
+			}
+			return fmt.Errorf("connection %q: %w", conn.Name, err)
 		}
 		if seen[conn.Name] {
-			return fmt.Errorf("connections[%d]: duplicate name %q", i, conn.Name)
+			return fmt.Errorf("connection %q: duplicate name", conn.Name)
 		}
 		seen[conn.Name] = true
-		if conn.Port < 0 || conn.Port > 65535 {
-			return fmt.Errorf("connection %q: invalid port %d", conn.Name, conn.Port)
-		}
-		switch conn.Type {
-		case TypePostgres, TypeMySQL:
-			if conn.Host == "" || conn.User == "" || conn.Database == "" {
-				return fmt.Errorf("connection %q: host, user and database are required for %s", conn.Name, conn.Type)
-			}
-		case TypeSQLite:
-			if conn.Path == "" {
-				return fmt.Errorf("connection %q: path is required for sqlite", conn.Name)
-			}
-		case TypeRedis:
-			if conn.Addr == "" {
-				return fmt.Errorf("connection %q: addr is required for redis", conn.Name)
-			}
-		case TypeMongo:
-			if conn.URI == "" && conn.Host == "" {
-				return fmt.Errorf("connection %q: uri or host is required for mongo", conn.Name)
-			}
-		default:
-			return fmt.Errorf("connection %q: unsupported type %q", conn.Name, conn.Type)
-		}
 	}
 	if c.DefaultConnection != "" && !seen[c.DefaultConnection] {
 		return fmt.Errorf("default_connection %q does not match any connection", c.DefaultConnection)

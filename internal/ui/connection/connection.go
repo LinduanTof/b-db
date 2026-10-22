@@ -1,0 +1,369 @@
+package connection
+
+import (
+	"errors"
+	"strconv"
+	"strings"
+
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+
+	"github.com/linduan/bdb/internal/config"
+	"github.com/linduan/bdb/internal/i18n"
+	"github.com/linduan/bdb/internal/ui/textutil"
+	"github.com/linduan/bdb/internal/ui/theme"
+)
+
+type SubmittedMsg struct {
+	Conn config.Connection
+}
+
+type fieldKind int
+
+const (
+	fieldType fieldKind = iota
+	fieldName
+	fieldHost
+	fieldPort
+	fieldUser
+	fieldPassword
+	fieldDatabase
+	fieldSSLMode
+	fieldPath
+)
+
+type field struct {
+	kind  fieldKind
+	input textinput.Model
+}
+
+type Model struct {
+	t *i18n.Translator
+
+	width, height int
+	open          bool
+	connType      string
+	fields        []field
+	focus         int
+	errText       string
+}
+
+func New(t *i18n.Translator) Model {
+	m := Model{t: t, connType: config.TypePostgres}
+	m.fields = []field{
+		{kind: fieldType},
+		{kind: fieldName, input: newInput("local")},
+		{kind: fieldHost, input: newInput("127.0.0.1")},
+		{kind: fieldPort, input: newInput("5432")},
+		{kind: fieldUser, input: newInput("postgres")},
+		{kind: fieldPassword, input: newSecret()},
+		{kind: fieldDatabase, input: newInput("postgres")},
+		{kind: fieldSSLMode, input: newInput("disable")},
+		{kind: fieldPath, input: newInput("./data.db")},
+	}
+	return m
+}
+
+func newInput(placeholder string) textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = placeholder
+	ti.Prompt = ""
+	ti.CharLimit = 256
+	ti.SetWidth(42)
+	return ti
+}
+
+func newSecret() textinput.Model {
+	ti := newInput("")
+	ti.EchoMode = textinput.EchoPassword
+	ti.EchoCharacter = '•'
+	return ti
+}
+
+func (m *Model) SetSize(width, height int) {
+	m.width, m.height = width, height
+}
+
+func (m *Model) Open() {
+	m.open = true
+	m.connType = config.TypePostgres
+	m.focus = 0
+	m.errText = ""
+	for i := range m.fields {
+		m.fields[i].input.SetValue("")
+		m.fields[i].input.Blur()
+	}
+	m.setValue(fieldPort, "5432")
+	m.setValue(fieldSSLMode, "disable")
+}
+
+func (m *Model) Close() { m.open = false }
+
+func (m Model) IsOpen() bool { return m.open }
+
+func (m *Model) SetError(text string) {
+	m.errText = text
+	m.open = true
+}
+
+func (m *Model) Update(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if !m.open {
+		return *m, nil
+	}
+	switch msg.String() {
+	case "esc":
+		m.open = false
+		return *m, nil
+	case "tab":
+		m.moveFocus(1)
+		return *m, nil
+	case "shift+tab":
+		m.moveFocus(-1)
+		return *m, nil
+	case "enter":
+		if m.focus >= len(m.visibleFields())-1 {
+			return m.submit()
+		}
+		m.moveFocus(1)
+		return *m, nil
+	}
+
+	visible := m.visibleFields()
+	if len(visible) == 0 {
+		return *m, nil
+	}
+	current := visible[min(max(m.focus, 0), len(visible)-1)]
+	if current.kind == fieldType {
+		switch msg.String() {
+		case "left", "h":
+			m.cycleType(-1)
+		case "right", "l":
+			m.cycleType(1)
+		}
+		return *m, nil
+	}
+	var cmd tea.Cmd
+	current.input, cmd = current.input.Update(msg)
+	return *m, cmd
+}
+
+func (m *Model) View() string {
+	if !m.open || m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+	boxW := min(66, m.width-4)
+	boxW = max(boxW, 40)
+	contentW := max(20, boxW-4)
+
+	lines := []string{theme.Title.Render(textutil.FitLine(" "+m.t.T(i18n.KeyFormTitle), contentW)), ""}
+	visible := m.visibleFields()
+	for i, f := range visible {
+		selected := i == m.focus
+		if f.kind == fieldType {
+			line := " ◀ " + m.connType + " ▶"
+			if selected {
+				line = theme.Selected.Render(textutil.FitLine(line, contentW))
+			} else {
+				line = textutil.FitLine(line, contentW)
+			}
+			lines = append(lines, line)
+			continue
+		}
+		marker := " "
+		if selected {
+			marker = "›"
+		}
+		label := marker + pad(m.t.T(f.labelKey()), 12)
+		lines = append(lines, textutil.FitLine(label+f.input.View(), contentW))
+	}
+	if m.errText != "" {
+		lines = append(lines, "", theme.Error.Render(textutil.FitLine(" "+m.errText, contentW)))
+	}
+	lines = append(lines, "", theme.Muted.Render(textutil.FitLine(" "+m.t.T(i18n.KeyFormHint), contentW)))
+
+	content := strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("117")).
+		Padding(0, 1).
+		Width(contentW).
+		Render(content)
+}
+
+func (m *Model) submit() (Model, tea.Cmd) {
+	conn, err := m.build()
+	if err != nil {
+		m.errText = err.Error()
+		return *m, nil
+	}
+	m.errText = ""
+	m.open = false
+	return *m, func() tea.Msg { return SubmittedMsg{Conn: conn} }
+}
+
+func (m *Model) build() (config.Connection, error) {
+	name := strings.TrimSpace(m.input(fieldName).Value())
+	if name == "" {
+		return config.Connection{}, m.required(i18n.KeyFormName)
+	}
+	conn := config.Connection{Name: name, Type: m.connType}
+
+	switch m.connType {
+	case config.TypeSQLite:
+		path := strings.TrimSpace(m.input(fieldPath).Value())
+		if path == "" {
+			return config.Connection{}, m.required(i18n.KeyFormPath)
+		}
+		conn.Path = path
+	case config.TypePostgres, config.TypeMySQL:
+		host := strings.TrimSpace(m.input(fieldHost).Value())
+		user := strings.TrimSpace(m.input(fieldUser).Value())
+		database := strings.TrimSpace(m.input(fieldDatabase).Value())
+		if host == "" {
+			return config.Connection{}, m.required(i18n.KeyFormHost)
+		}
+		if user == "" {
+			return config.Connection{}, m.required(i18n.KeyFormUser)
+		}
+		if database == "" {
+			return config.Connection{}, m.required(i18n.KeyFormDatabase)
+		}
+		port := 0
+		if portText := strings.TrimSpace(m.input(fieldPort).Value()); portText != "" {
+			p, err := strconv.Atoi(portText)
+			if err != nil || p < 1 || p > 65535 {
+				return config.Connection{}, errors.New(m.t.T(i18n.KeyFormInvalidPort, portText))
+			}
+			port = p
+		}
+		conn.Host = host
+		conn.User = user
+		conn.Database = database
+		conn.Port = port
+		conn.Password = m.input(fieldPassword).Value()
+		if m.connType == config.TypePostgres {
+			conn.SSLMode = strings.TrimSpace(m.input(fieldSSLMode).Value())
+		}
+	default:
+		return config.Connection{}, errors.New(m.t.T(i18n.KeyErrorNotSupported, m.connType))
+	}
+	return conn, nil
+}
+
+func (m *Model) required(key string) error {
+	return errors.New(m.t.T(i18n.KeyFormRequired, m.t.T(key)))
+}
+
+func (m *Model) input(kind fieldKind) *textinput.Model {
+	for i := range m.fields {
+		if m.fields[i].kind == kind {
+			return &m.fields[i].input
+		}
+	}
+	return nil
+}
+
+func (m *Model) setValue(kind fieldKind, value string) {
+	if input := m.input(kind); input != nil {
+		input.SetValue(value)
+	}
+}
+
+func (m *Model) visibleFields() []*field {
+	out := make([]*field, 0, len(m.fields))
+	for i := range m.fields {
+		if m.isVisible(m.fields[i].kind) {
+			out = append(out, &m.fields[i])
+		}
+	}
+	return out
+}
+
+func (m *Model) isVisible(kind fieldKind) bool {
+	switch m.connType {
+	case config.TypeSQLite:
+		return kind == fieldType || kind == fieldName || kind == fieldPath
+	case config.TypeMySQL:
+		return kind != fieldPath && kind != fieldSSLMode
+	default:
+		return kind != fieldPath
+	}
+}
+
+func (m *Model) moveFocus(delta int) {
+	visible := m.visibleFields()
+	if len(visible) == 0 {
+		return
+	}
+	if m.focus >= 0 && m.focus < len(visible) {
+		visible[m.focus].input.Blur()
+	}
+	m.focus = (m.focus + delta + len(visible)) % len(visible)
+	if visible[m.focus].kind != fieldType {
+		_ = visible[m.focus].input.Focus()
+	}
+}
+
+func (m *Model) cycleType(delta int) {
+	types := []string{config.TypePostgres, config.TypeMySQL, config.TypeSQLite}
+	index := 0
+	for i, typ := range types {
+		if typ == m.connType {
+			index = i
+			break
+		}
+	}
+	index = (index + delta + len(types)) % len(types)
+	m.connType = types[index]
+	m.focus = 0
+	m.errText = ""
+	for i := range m.fields {
+		m.fields[i].input.Blur()
+	}
+
+	port := m.input(fieldPort)
+	switch m.connType {
+	case config.TypePostgres:
+		if port.Value() == "" || port.Value() == "3306" {
+			port.SetValue("5432")
+		}
+		if m.input(fieldSSLMode).Value() == "" {
+			m.setValue(fieldSSLMode, "disable")
+		}
+	case config.TypeMySQL:
+		if port.Value() == "" || port.Value() == "5432" {
+			port.SetValue("3306")
+		}
+	}
+}
+
+func (f *field) labelKey() string {
+	switch f.kind {
+	case fieldName:
+		return i18n.KeyFormName
+	case fieldHost:
+		return i18n.KeyFormHost
+	case fieldPort:
+		return i18n.KeyFormPort
+	case fieldUser:
+		return i18n.KeyFormUser
+	case fieldPassword:
+		return i18n.KeyFormPassword
+	case fieldDatabase:
+		return i18n.KeyFormDatabase
+	case fieldSSLMode:
+		return i18n.KeyFormSSLMode
+	case fieldPath:
+		return i18n.KeyFormPath
+	default:
+		return i18n.KeyFormType
+	}
+}
+
+func pad(s string, width int) string {
+	if d := width - textutil.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
+	}
+	return s
+}

@@ -14,11 +14,15 @@ import (
 	"github.com/linduan/bdb/internal/history"
 	"github.com/linduan/bdb/internal/i18n"
 	"github.com/linduan/bdb/internal/ui/command"
+	uicomplete "github.com/linduan/bdb/internal/ui/complete"
+	"github.com/linduan/bdb/internal/ui/connection"
 	"github.com/linduan/bdb/internal/ui/sidebar"
+	"github.com/linduan/bdb/internal/ui/theme"
 )
 
 func testModel(t *testing.T, lang string) *Model {
 	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dbPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "demo.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +48,15 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 		if msg == nil {
 			return m
 		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				m = runCmd(t, m, sub)
+			}
+			return m
+		}
 		switch msg.(type) {
 		case connOpenedMsg, queryDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
+			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
 			sidebar.ConnectMsg, sidebar.SelectTableMsg, command.SelectedMsg:
 		default:
@@ -304,6 +315,162 @@ func TestHistoryStore(t *testing.T) {
 
 	if entries := store.Entries(); len(entries) != 1 || entries[0] != "SELECT 1;" {
 		t.Fatalf("history = %#v", entries)
+	}
+}
+
+func TestSQLCompletion(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.focus = focusEditor
+	_ = m.editor.Focus()
+	m.editor.SetValue("sel")
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: ' ', Mod: tea.ModCtrl})
+	if !m.completion.IsOpen() {
+		t.Fatalf("completion should open, status=%s", m.status)
+	}
+	content := m.View().Content
+	if !strings.Contains(content, "Completions: sel") || !strings.Contains(content, "SELECT") {
+		t.Fatalf("completion view:\n%s", content)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.editor.Value(); got != "SELECT" {
+		t.Fatalf("value = %q, want SELECT", got)
+	}
+}
+
+func TestAutoCompletionTables(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.focus = focusEditor
+	_ = m.editor.Focus()
+	m.editor.SetValue("SELECT * FROM us")
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "e"})
+	if !m.completion.IsOpen() {
+		t.Fatalf("completion should open automatically, status=%s", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.editor.Value(); got != "SELECT * FROM users" {
+		t.Fatalf("value = %q", got)
+	}
+}
+
+func TestColumnCompletion(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.focus = focusEditor
+	_ = m.editor.Focus()
+	m.editor.SetValue("SELECT users.")
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: ' ', Mod: tea.ModCtrl})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: ' ', Mod: tea.ModCtrl})
+	if !m.completion.IsOpen() {
+		t.Fatalf("column completion should open, status=%s", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "na"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.editor.Value(); got != "SELECT users.name" {
+		t.Fatalf("value = %q", got)
+	}
+}
+
+func TestAddConnectionFromUI(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "a"})
+	if !m.connForm.IsOpen() {
+		t.Fatal("'a' should open the connection form")
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "smoke"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	path := filepath.Join(t.TempDir(), "smoke.db")
+	m = sendKey(t, m, tea.KeyPressMsg{Text: path})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.connName != "smoke" || m.conn == nil {
+		t.Fatalf("connection = %q, status=%s", m.connName, m.status)
+	}
+	defer m.conn.Close()
+	if !strings.Contains(m.sidebar.View(), "smoke") {
+		t.Fatalf("sidebar missing new connection:\n%s", m.sidebar.View())
+	}
+	conns, err := config.LoadRuntimeConnections()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conns) != 1 || conns[0].Name != "smoke" || conns[0].Path != path {
+		t.Fatalf("saved connections = %+v", conns)
+	}
+}
+
+func TestAddConnectionDuplicate(t *testing.T) {
+	m := testModel(t, "en")
+	m.addConnection(config.Connection{Name: "local-sqlite", Type: config.TypeSQLite, Path: "./x.db"})
+	if !m.connForm.IsOpen() {
+		t.Fatal("form should stay open on duplicate name")
+	}
+	if !strings.Contains(m.connForm.View(), "already exists") {
+		t.Fatalf("form should show duplicate error:\n%s", m.connForm.View())
+	}
+}
+
+func TestAddConnectionCancel(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "a"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.connForm.IsOpen() {
+		t.Fatal("esc should close the form")
+	}
+}
+
+func TestThemeCommand(t *testing.T) {
+	m := testModel(t, "en")
+	defer theme.Set("default")
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "theme dracula"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if theme.Current() != "dracula" {
+		t.Fatalf("theme = %q, want dracula", theme.Current())
+	}
+	if !strings.Contains(m.status, "Theme: dracula") {
+		t.Fatalf("status = %q", m.status)
+	}
+	if got := config.LoadThemeState(); got != "dracula" {
+		t.Fatalf("saved theme = %q", got)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "theme"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if theme.Current() == "dracula" {
+		t.Fatal("theme command without args should cycle to the next theme")
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: ":"})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "theme nope"})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !strings.Contains(m.status, "unknown theme") {
+		t.Fatalf("status = %q", m.status)
 	}
 }
 

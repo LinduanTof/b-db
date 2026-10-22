@@ -2,7 +2,7 @@
 
 一款面向 Linux 终端的现代化数据库管理工具，使用 Go + [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) 构建。目标是在一个终端窗口内完成连接管理、库表浏览、SQL 编辑执行、数据编辑与导出。
 
-当前完成 **P1**：在 P0（PostgreSQL/SQLite 完整闭环）基础上，新增 MySQL/MariaDB、表结构详情（列/索引/外键）、Markdown 导出、SQL 文件执行、查询历史持久化，以及结果网格的列宽调整、排序与单元格复制。
+当前完成 **P1**：PostgreSQL/SQLite/MySQL 浏览与查询、表结构详情、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、结果网格增强、6 套可持久化主题、SQL 自动补全，以及界面内添加数据源。
 
 ## 快速开始
 
@@ -22,6 +22,7 @@ make build
 default_connection: local
 ui:
   language: auto          # auto | en | zh
+  theme: default          # default | dracula | gruvbox | nord | catppuccin | solarized-light
 query:
   timeout: 30s
   max_rows: 1000
@@ -63,8 +64,10 @@ connections:
 | 连接 | `→` / `←` | 展开 / 折叠 |
 | 连接 | `s` | 选中表并生成 `SELECT` |
 | 连接 | `d` | 查看表结构（列/索引/外键） |
+| 连接 | `a` | 添加数据源（侧栏/结果焦点） |
 | 连接 | `r` | 重新加载当前节点 |
 | 编辑器 | `Ctrl+Enter` / `F5` | 执行 SQL |
+| 编辑器 | `Ctrl+Space` | 手动触发 SQL 补全 |
 | 编辑器 | `Ctrl+P` / `Ctrl+N` | 查询历史 |
 | 编辑器 | `Esc` | 取消正在执行的查询 |
 | 结果 | 方向键 / `hjkl` | 移动单元格 |
@@ -84,11 +87,13 @@ connections:
 | 命令 | 作用 |
 |---|---|
 | `:connect <name>` | 连接到配置中的连接 |
+| `:add` | 打开添加数据源表单 |
 | `:disconnect` | 断开当前连接并清空结果 |
 | `:describe` | 查看侧栏中选中表的结构 |
 | `:export csv\|json\|md` | 导出当前结果 |
 | `:focus sidebar\|editor\|results` | 切换焦点 |
 | `:lang en\|zh` | 切换界面语言 |
+| `:theme <name>` | 切换配色主题（无参数时切到下一个） |
 | `:run <path>` | 执行 SQL 文件 |
 | `:help` | 显示快捷键与命令帮助 |
 | `:reload` | 重新连接当前连接 |
@@ -111,6 +116,23 @@ connections:
 ```
 
 脚本按分号切分，支持单引号/双引号/反引号字符串、`--`、`#`、`/* */` 注释；任一语句失败会停止并报告语句序号。执行期间可按 `Esc` 取消。
+
+## 添加数据源
+
+在侧栏或结果面板按 `a`，或执行 `:add`，打开连接表单。用 `←`/`→` 选择 PostgreSQL、MySQL 或 SQLite，`Tab` 切换字段，`Enter` 在最后一个字段保存，`Esc` 取消。
+
+- 密码字段以掩码显示；也可以填写 `${ENV_VAR}` 引用环境变量。
+- 保存后会自动建立连接，新数据源立即出现在侧栏。
+- 运行时添加的连接保存在 `$XDG_STATE_HOME/bdb/connections.yaml`（权限 `0600`），启动时与主配置合并；同名连接不会重复添加。
+- 字段会根据类型动态变化：SQLite 只需要名称与路径，MySQL 不显示 SSL 模式。
+
+## SQL 自动补全
+
+在编辑器中输入标识符时会自动弹出候选，也可按 `Ctrl+Space` 手动触发。候选包括 SQL 关键字、常用函数、当前连接的所有表名，以及已加载的列名；输入 `users.` 时会按需加载该表的列。`↑`/`↓` 选择，`Tab` 或 `Enter` 接受，`Esc` 关闭。
+
+## 主题
+
+内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或运行时执行 `:theme <name>`（不带参数会切到下一套）。运行时选择会写入 `$XDG_STATE_HOME/bdb/theme`，下次启动自动恢复。
 
 ## 查询历史
 
@@ -138,4 +160,6 @@ mysql -h 127.0.0.1 -ubdb -pbdb bdb
 
 - **P2**：数据编辑（主键定位、事务、SQL 预览与确认）、语法高亮编辑器。
 - **P3**：Redis、MongoDB、多会话。
-- **P4**：主题、性能基准、静态二进制发布。
+- **P4**：性能基准、静态二进制发布。
+
+已完成：主题系统、SQL 自动补全。

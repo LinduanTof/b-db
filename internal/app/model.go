@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	ac "github.com/linduan/bdb/internal/complete"
 	"github.com/linduan/bdb/internal/config"
 	"github.com/linduan/bdb/internal/db"
 	_ "github.com/linduan/bdb/internal/db/sql"
@@ -22,6 +23,8 @@ import (
 	"github.com/linduan/bdb/internal/query"
 	"github.com/linduan/bdb/internal/sqlscript"
 	"github.com/linduan/bdb/internal/ui/command"
+	uicomplete "github.com/linduan/bdb/internal/ui/complete"
+	"github.com/linduan/bdb/internal/ui/connection"
 	"github.com/linduan/bdb/internal/ui/detail"
 	"github.com/linduan/bdb/internal/ui/editor"
 	"github.com/linduan/bdb/internal/ui/results"
@@ -73,19 +76,41 @@ type scriptDoneMsg struct {
 	err      error
 }
 
+type tableRef struct {
+	Name   string
+	Schema string
+}
+
+type completionTablesMsg struct {
+	tables []tableRef
+	err    error
+}
+
+type completionColumnsMsg struct {
+	table   string
+	columns []string
+	err     error
+}
+
 type Model struct {
 	cfg *config.Config
 	t   *i18n.Translator
 
-	sidebar   sidebar.Model
-	editor    editor.Model
-	results   results.Model
-	statusbar statusbar.Model
-	command   command.Model
-	detail    detail.Model
+	sidebar    sidebar.Model
+	editor     editor.Model
+	results    results.Model
+	statusbar  statusbar.Model
+	command    command.Model
+	detail     detail.Model
+	completion uicomplete.Model
+	connForm   connection.Model
+
+	completer    *ac.Engine
+	tableSchemas map[string]string
 
 	history       *history.Store
 	pendingScript string
+	themeName     string
 
 	width, height                    int
 	sideW, rightW, editorH, resultsH int
@@ -113,11 +138,23 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 		status: t.T(i18n.KeyStatusReady),
 		focus:  focusSidebar,
 	}
+	themeName := cfg.UI.Theme
+	if saved := config.LoadThemeState(); saved != "" {
+		themeName = saved
+	}
+	m.themeName = theme.Set(themeName)
+	if err := config.MergeRuntime(cfg); err != nil {
+		m.setStatus(t.T(i18n.KeyErrorLoadConnections, err), true)
+	}
 	m.sidebar = sidebar.New(cfg.Connections, t)
 	m.editor = editor.New(t)
 	m.results = results.New(t)
 	m.command = command.New(t)
 	m.detail = detail.New(t)
+	m.completion = uicomplete.New(t)
+	m.connForm = connection.New(t)
+	m.completer = ac.New()
+	m.tableSchemas = map[string]string{}
 	if wd, err := os.Getwd(); err == nil {
 		m.outDir = wd
 	}
@@ -140,6 +177,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.command.SetSize(msg.Width, msg.Height)
 		m.detail.SetSize(msg.Width, msg.Height)
+		m.completion.SetSize(msg.Width, msg.Height)
+		m.connForm.SetSize(msg.Width, msg.Height)
 		m.layout()
 		return m, nil
 	case tea.KeyPressMsg:
@@ -159,6 +198,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scriptDoneMsg:
 		m.handleScriptDone(msg)
 		return m, nil
+	case completionTablesMsg:
+		if msg.err == nil {
+			names := make([]string, 0, len(msg.tables))
+			m.tableSchemas = make(map[string]string, len(msg.tables))
+			for _, ref := range msg.tables {
+				names = append(names, ref.Name)
+				key := strings.ToLower(ref.Name)
+				if _, ok := m.tableSchemas[key]; !ok {
+					m.tableSchemas[key] = ref.Schema
+				}
+			}
+			m.completer.SetTables(names)
+		}
+		return m, nil
+	case completionColumnsMsg:
+		if msg.err == nil {
+			m.completer.SetColumns(msg.table, msg.columns)
+			m.setStatus(m.t.T(i18n.KeyStatusReady), false)
+		}
+		return m, nil
+	case uicomplete.AcceptedMsg:
+		if m.focus == focusEditor {
+			m.editor.ReplaceBeforeCursor(msg.PrefixLen, msg.Text)
+		}
+		m.completion.Close()
+		return m, nil
+	case connection.SubmittedMsg:
+		return m, m.addConnection(msg.Conn)
 	case connOpenedMsg:
 		return m, m.handleConnOpened(msg)
 	case queryDoneMsg:
@@ -219,6 +286,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.detail, cmd = m.detail.Update(msg)
 		return cmd
 	}
+	if m.connForm.IsOpen() {
+		var cmd tea.Cmd
+		m.connForm, cmd = m.connForm.Update(msg)
+		return cmd
+	}
 	if m.showHelp {
 		switch key {
 		case "?", "esc":
@@ -249,6 +321,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.shutdown()
 		return tea.Quit
 	}
+	if key == "a" && m.focus != focusEditor {
+		m.completion.Close()
+		m.connForm.Open()
+		return nil
+	}
 	switch key {
 	case "tab":
 		return m.cycleFocus(1)
@@ -268,6 +345,17 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.sidebar, cmd = m.sidebar.Update(msg)
 		return cmd
 	case focusEditor:
+		if key == "ctrl+space" {
+			return m.refreshCompletion(true)
+		}
+		if m.completion.IsOpen() {
+			switch key {
+			case "up", "down", "ctrl+p", "ctrl+n", "tab", "enter", "esc":
+				var cmd tea.Cmd
+				m.completion, cmd = m.completion.Update(msg)
+				return cmd
+			}
+		}
 		switch key {
 		case "ctrl+enter", "f5":
 			return m.runQuery()
@@ -280,6 +368,13 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
+		if key == "backspace" || msg.Text != "" {
+			if refresh := m.refreshCompletion(false); refresh != nil {
+				return tea.Batch(cmd, refresh)
+			}
+		} else if m.completion.IsOpen() {
+			m.completion.Close()
+		}
 		return cmd
 	case focusResults:
 		switch key {
@@ -306,6 +401,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 func (m *Model) cycleFocus(delta int) tea.Cmd {
 	const count = 3
+	m.completion.Close()
 	m.focus = focus((int(m.focus) + delta + count) % count)
 	m.editor.Blur()
 	if m.focus == focusEditor {
@@ -349,13 +445,17 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	m.connName = msg.name
 	m.executor = query.Executor{Conn: m.conn, MaxRows: m.cfg.Query.MaxRows}
 	m.setStatus(m.t.T(i18n.KeyStatusConnected, msg.name), false)
-	loadCmd := m.sidebar.SetConn(m.conn)
+	m.completer.Reset()
+	m.tableSchemas = map[string]string{}
+	m.completion.Close()
+
+	cmds := []tea.Cmd{m.sidebar.SetConn(m.conn), m.loadCompletionTablesCmd()}
 	if m.pendingScript != "" {
 		path := m.pendingScript
 		m.pendingScript = ""
-		return tea.Batch(loadCmd, m.runScriptCmd(path))
+		cmds = append(cmds, m.runScriptCmd(path))
 	}
-	return loadCmd
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) runQuery() tea.Cmd {
@@ -535,6 +635,12 @@ func (m *Model) render() string {
 	if m.command.IsOpen() {
 		return textutil.Overlay(base, m.command.View(), m.width, m.height)
 	}
+	if m.connForm.IsOpen() {
+		return textutil.Overlay(base, m.connForm.View(), m.width, m.height)
+	}
+	if m.completion.IsOpen() {
+		return textutil.Overlay(base, m.completion.View(), m.width, m.height)
+	}
 	return base
 }
 
@@ -591,6 +697,7 @@ func (m *Model) renderHelp() string {
 		lines = append(lines, line+"  "+m.t.T(d.DescKey))
 	}
 	lines = append(lines, "",
+		theme.Muted.Render(m.t.T(i18n.KeyHelpThemes, strings.Join(theme.Names(), ", "))),
 		theme.Muted.Render(m.t.T(i18n.KeyHelpCommandsTip)),
 		theme.Muted.Render(m.t.T(i18n.KeyHelpClose)),
 	)
@@ -668,6 +775,10 @@ func (m *Model) runCommand(msg command.SelectedMsg) tea.Cmd {
 			return usage("run <path>")
 		}
 		return m.runScriptCmd(msg.Args[0])
+	case "add":
+		m.completion.Close()
+		m.connForm.Open()
+		return nil
 	case "focus":
 		if len(msg.Args) < 1 {
 			return usage("focus sidebar|editor|results")
@@ -700,6 +811,29 @@ func (m *Model) runCommand(msg command.SelectedMsg) tea.Cmd {
 			return usage("lang en|zh")
 		}
 		m.setStatus(m.t.T(i18n.KeyStatusLang, string(m.t.Lang())), false)
+		return nil
+	case "theme":
+		names := theme.Names()
+		target := ""
+		if len(msg.Args) > 0 {
+			target = msg.Args[0]
+		} else {
+			idx := 0
+			for i, n := range names {
+				if n == m.themeName {
+					idx = (i + 1) % len(names)
+					break
+				}
+			}
+			target = names[idx]
+		}
+		if !theme.Exists(target) {
+			m.setStatus(m.t.T(i18n.KeyErrorTheme, target, strings.Join(names, ", ")), true)
+			return nil
+		}
+		m.themeName = theme.Set(target)
+		_ = config.SaveThemeState(m.themeName)
+		m.setStatus(m.t.T(i18n.KeyStatusTheme, m.themeName), false)
 		return nil
 	case "help":
 		m.showHelp = true
@@ -826,6 +960,93 @@ func (m *Model) SetHistory(store *history.Store) {
 
 func (m *Model) SetInitialScript(path string) { m.pendingScript = path }
 
+func (m *Model) refreshCompletion(force bool) tea.Cmd {
+	if m.focus != focusEditor || m.conn == nil || m.completer == nil {
+		m.completion.Close()
+		return nil
+	}
+	word, _ := m.editor.WordBeforeCursor()
+	if word == "" {
+		m.completion.Close()
+		return nil
+	}
+	qualifier, prefix := ac.SplitWord(word)
+	if !force && len([]rune(prefix)) < 2 {
+		m.completion.Close()
+		return nil
+	}
+	if qualifier != "" && !m.completer.HasColumns(qualifier) {
+		m.completion.Close()
+		m.setStatus(m.t.T(i18n.KeyStatusCompletionLoading), false)
+		return m.loadColumnsCmd(qualifier)
+	}
+	candidates := m.completer.Suggest(word)
+	if len(candidates) == 0 {
+		m.completion.Close()
+		return nil
+	}
+	m.completion.Open(prefix, candidates)
+	return nil
+}
+
+func (m *Model) loadColumnsCmd(qualifier string) tea.Cmd {
+	conn := m.conn
+	if conn == nil {
+		return nil
+	}
+	schema, table := "", qualifier
+	if i := strings.LastIndex(qualifier, "."); i >= 0 {
+		schema, table = qualifier[:i], qualifier[i+1:]
+	} else if s, ok := m.tableSchemas[strings.ToLower(table)]; ok {
+		schema = s
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		columns, err := conn.Catalog().Columns(ctx, schema, table)
+		if err != nil {
+			return completionColumnsMsg{table: qualifier, err: err}
+		}
+		names := make([]string, 0, len(columns))
+		for _, column := range columns {
+			names = append(names, column.Name)
+		}
+		return completionColumnsMsg{table: qualifier, columns: names}
+	}
+}
+
+func (m *Model) loadCompletionTablesCmd() tea.Cmd {
+	conn := m.conn
+	if conn == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		schemas, err := conn.Catalog().Schemas(ctx)
+		if err != nil {
+			return completionTablesMsg{err: err}
+		}
+		seen := map[string]bool{}
+		var refs []tableRef
+		for _, schema := range schemas {
+			objects, err := conn.Catalog().Tables(ctx, schema)
+			if err != nil {
+				return completionTablesMsg{err: err}
+			}
+			for _, object := range objects {
+				key := strings.ToLower(object.Name)
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				refs = append(refs, tableRef{Name: object.Name, Schema: object.Schema})
+			}
+		}
+		return completionTablesMsg{tables: refs}
+	}
+}
+
 func (m *Model) shutdown() {
 	if m.cancel != nil {
 		m.cancel()
@@ -838,6 +1059,21 @@ func (m *Model) shutdown() {
 	if store := m.history; store != nil {
 		_ = store.Save()
 	}
+}
+
+func (m *Model) addConnection(conn config.Connection) tea.Cmd {
+	if m.cfg.Find(conn.Name) != nil {
+		m.connForm.SetError(m.t.T(i18n.KeyFormDuplicate, conn.Name))
+		return nil
+	}
+	if err := config.AppendRuntimeConnection(conn); err != nil {
+		m.connForm.SetError(m.t.T(i18n.KeyErrorSaveConnection, err))
+		return nil
+	}
+	m.cfg.Connections = append(m.cfg.Connections, conn)
+	m.sidebar.AddConnection(conn)
+	m.setStatus(m.t.T(i18n.KeyStatusConnectionAdded, conn.Name), false)
+	return m.connectCmd(conn.Name)
 }
 
 func (m *Model) setStatus(text string, isError bool) {
