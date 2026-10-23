@@ -11,7 +11,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	ac "github.com/LinduanTof/b-db/internal/complete"
 	"github.com/LinduanTof/b-db/internal/config"
@@ -34,7 +33,6 @@ import (
 	"github.com/LinduanTof/b-db/internal/ui/results"
 	"github.com/LinduanTof/b-db/internal/ui/sidebar"
 	"github.com/LinduanTof/b-db/internal/ui/statusbar"
-	"github.com/LinduanTof/b-db/internal/ui/textutil"
 	"github.com/LinduanTof/b-db/internal/ui/textview"
 	"github.com/LinduanTof/b-db/internal/ui/theme"
 )
@@ -48,6 +46,7 @@ const (
 )
 
 type connOpenedMsg struct {
+	id   uint64
 	name string
 	conn db.Conn
 	err  error
@@ -68,9 +67,11 @@ type editTarget struct {
 	column   string
 	dataType string
 	key      map[string]any
+	wasNull  bool
 }
 
 type editInfoMsg struct {
+	id      uint64
 	schema  string
 	table   string
 	action  string
@@ -80,6 +81,7 @@ type editInfoMsg struct {
 }
 
 type mutationDoneMsg struct {
+	id       uint64
 	kind     string
 	affected int64
 	err      error
@@ -91,6 +93,7 @@ type exportedMsg struct {
 }
 
 type detailLoadedMsg struct {
+	id      uint64
 	title   string
 	columns []db.Column
 	indexes []db.Index
@@ -99,6 +102,7 @@ type detailLoadedMsg struct {
 }
 
 type scriptDoneMsg struct {
+	id       uint64
 	total    int
 	executed int
 	failedAt int
@@ -114,23 +118,27 @@ type tableRef struct {
 }
 
 type completionTablesMsg struct {
+	id     uint64
 	tables []tableRef
 	err    error
 }
 
 type completionColumnsMsg struct {
+	id      uint64
 	table   string
 	columns []string
 	err     error
 }
 
 type ddlLoadedMsg struct {
+	id    uint64
 	title string
 	text  string
 	err   error
 }
 
 type indexesLoadedMsg struct {
+	id    uint64
 	title string
 	text  string
 	err   error
@@ -153,10 +161,11 @@ type Model struct {
 	cellEdit   celledit.Model
 	confirm    confirm.Model
 
-	pendingCmd    tea.Cmd
-	pendingSource *db.TableRef
-	editCache     map[string]editInfo
-	editTarget    editTarget
+	pendingCmd      tea.Cmd
+	pendingSource   *db.TableRef
+	pendingSourceID uint64
+	editCache       map[string]editInfo
+	editTarget      editTarget
 
 	tableMenuSchema string
 	tableMenuTable  string
@@ -183,9 +192,11 @@ type Model struct {
 	sessions map[string]*session
 	executor query.Executor
 
-	querySeq uint64
-	cancel   context.CancelFunc
-	running  bool
+	querySeq       uint64
+	connectSeq     uint64
+	cancel         context.CancelFunc
+	mutationCancel context.CancelFunc
+	running        bool
 
 	status    string
 	statusErr bool
@@ -287,6 +298,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tableMenu.Open(qualifiedTable(msg.Schema, msg.Table), m.tableMenuItems())
 		return m, nil
 	case ddlLoadedMsg:
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.textView.Open(msg.title, m.t.T(i18n.KeyErrorDDL, msg.err))
 		} else {
@@ -294,6 +308,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case indexesLoadedMsg:
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.textView.Open(msg.title, m.t.T(i18n.KeyErrorIndexes, msg.err))
 		} else {
@@ -301,6 +318,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case detailLoadedMsg:
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
 		if m.detail.IsOpen() && m.detail.Title() == msg.title {
 			if msg.err != nil {
 				m.detail.SetData(nil, nil, nil, msg.err)
@@ -314,6 +334,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleScriptDone(msg)
 		return m, nil
 	case completionTablesMsg:
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
 		if msg.err == nil {
 			names := make([]string, 0, len(msg.tables))
 			m.tableSchemas = make(map[string]string, len(msg.tables))
@@ -328,6 +351,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case completionColumnsMsg:
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
 		if msg.err == nil {
 			m.completer.SetColumns(msg.table, msg.columns)
 			m.setStatus(m.t.T(i18n.KeyStatusReady), false)
@@ -499,7 +525,8 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 
 func (m *Model) anyOverlayOpen() bool {
 	return m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
-		m.detail.IsOpen() || m.connForm.IsOpen() || m.completion.IsOpen() || m.showHelp
+		m.detail.IsOpen() || m.connForm.IsOpen() || m.cellEdit.IsOpen() ||
+		m.confirm.IsOpen() || m.completion.IsOpen() || m.showHelp
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -549,6 +576,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.confirm.IsOpen() {
 		var cmd tea.Cmd
 		m.confirm, cmd = m.confirm.Update(msg)
+		if !m.confirm.IsOpen() && cmd == nil {
+			m.pendingCmd = nil
+			m.cancelMutation()
+		}
 		return cmd
 	}
 	if m.showHelp {
@@ -705,10 +736,12 @@ func (m *Model) toggleZoom() {
 }
 
 func (m *Model) connectCmd(name string) tea.Cmd {
+	m.connectSeq++
+	id := m.connectSeq
 	connCfg := m.cfg.Find(name)
 	if connCfg == nil {
 		return func() tea.Msg {
-			return connOpenedMsg{name: name, err: fmt.Errorf("connection %q not found", name)}
+			return connOpenedMsg{id: id, name: name, err: fmt.Errorf("connection %q not found", name)}
 		}
 	}
 	m.setStatus(m.t.T(i18n.KeyStatusConnecting, name), false)
@@ -717,17 +750,23 @@ func (m *Model) connectCmd(name string) tea.Cmd {
 		defer cancel()
 		conn, err := db.Open(ctx, toDBConfig(connCfg))
 		if err != nil {
-			return connOpenedMsg{name: name, err: err}
+			return connOpenedMsg{id: id, name: name, err: err}
 		}
 		if err := conn.Ping(ctx); err != nil {
 			conn.Close()
-			return connOpenedMsg{name: name, err: err}
+			return connOpenedMsg{id: id, name: name, err: err}
 		}
-		return connOpenedMsg{name: name, conn: conn}
+		return connOpenedMsg{id: id, name: name, conn: conn}
 	}
 }
 
 func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
+	if msg.id != m.connectSeq {
+		if msg.conn != nil {
+			msg.conn.Close()
+		}
+		return nil
+	}
 	if msg.err != nil {
 		m.setStatus(m.t.T(i18n.KeyErrorConnect, msg.err), true)
 		return nil
@@ -759,6 +798,10 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 }
 
 func (m *Model) runQuery() tea.Cmd {
+	return m.runQueryWithSource(nil)
+}
+
+func (m *Model) runQueryWithSource(source *db.TableRef) tea.Cmd {
 	stmt := strings.TrimSpace(m.editor.Value())
 	if stmt == "" {
 		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
@@ -768,19 +811,29 @@ func (m *Model) runQuery() tea.Cmd {
 		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
 		return nil
 	}
+	if m.readOnly() && query.IsWriteFor(m.conn.Type(), stmt) {
+		m.setStatus(m.t.T(i18n.KeyErrorReadOnly), true)
+		return nil
+	}
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
 	}
 	m.querySeq++
 	id := m.querySeq
+	m.pendingSource = nil
+	m.pendingSourceID = 0
+	if source != nil {
+		m.pendingSource = source
+		m.pendingSourceID = id
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.Query.Timeout.Std())
 	m.cancel = cancel
 	m.running = true
 	m.editor.AddHistory(stmt)
-	if store := m.history; store != nil {
+	store := m.history
+	if store != nil {
 		store.Add(stmt)
-		_ = store.Save()
 	}
 	m.setStatus(m.t.T(i18n.KeyStatusRunning), false)
 
@@ -788,6 +841,9 @@ func (m *Model) runQuery() tea.Cmd {
 	return func() tea.Msg {
 		outcome := executor.Run(ctx, stmt)
 		cancel()
+		if store != nil {
+			_ = store.Save()
+		}
 		return queryDoneMsg{id: id, outcome: outcome}
 	}
 }
@@ -807,6 +863,7 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 	}
 	defer func() {
 		m.pendingSource = nil
+		m.pendingSourceID = 0
 	}()
 	m.running = false
 	if m.cancel != nil {
@@ -831,7 +888,7 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 	switch {
 	case out.Result != nil:
 		m.results.SetResult(out.Result)
-		if m.pendingSource != nil {
+		if m.pendingSource != nil && m.pendingSourceID == msg.id {
 			m.results.SetSource(m.pendingSource.Schema, m.pendingSource.Name)
 		}
 		duration := humanDuration(out.Result.Elapsed)
@@ -859,7 +916,7 @@ func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
 		m.layout()
 		return m.editor.Focus()
 	}
-	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(msg.Schema, msg.Table)))
+	m.editor.SetValue(m.selectTableStmt(msg.Schema, msg.Table))
 	m.focus = focusEditor
 	m.layout()
 	return m.editor.Focus()
@@ -914,13 +971,20 @@ func qualifiedTable(schema, table string) string {
 	return table
 }
 
+func (m *Model) selectTableStmt(schema, table string) string {
+	qualified := qualifiedTable(schema, table)
+	if m.cfg.Query.MaxRows > 0 {
+		return fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualified, m.cfg.Query.MaxRows)
+	}
+	return fmt.Sprintf("SELECT * FROM %s;", qualified)
+}
+
 func (m *Model) tableData(schema, table string) tea.Cmd {
-	m.editor.SetValue(fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(schema, table)))
+	m.editor.SetValue(m.selectTableStmt(schema, table))
 	m.focus = focusEditor
 	m.layout()
-	m.pendingSource = &db.TableRef{Schema: schema, Name: table}
 	focus := m.editor.Focus()
-	run := m.runQuery()
+	run := m.runQueryWithSource(&db.TableRef{Schema: schema, Name: table})
 	return tea.Batch(focus, run)
 }
 
@@ -993,11 +1057,12 @@ func (m *Model) openDDL(schema, table string) tea.Cmd {
 		return nil
 	}
 	title := fmt.Sprintf(m.t.T(i18n.KeyTableDDLTitle), qualifiedTable(schema, table))
+	id := m.connectSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		ddl, err := conn.Catalog().DDL(ctx, schema, table)
-		return ddlLoadedMsg{title: title, text: ddl, err: err}
+		return ddlLoadedMsg{id: id, title: title, text: ddl, err: err}
 	}
 }
 
@@ -1008,14 +1073,15 @@ func (m *Model) openIndexes(schema, table string) tea.Cmd {
 		return nil
 	}
 	title := fmt.Sprintf(m.t.T(i18n.KeyTableIndexesTitle), qualifiedTable(schema, table))
+	id := m.connectSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		indexes, err := conn.Catalog().Indexes(ctx, schema, table)
 		if err != nil {
-			return indexesLoadedMsg{title: title, err: err}
+			return indexesLoadedMsg{id: id, title: title, err: err}
 		}
-		return indexesLoadedMsg{title: title, text: formatIndexes(indexes)}
+		return indexesLoadedMsg{id: id, title: title, text: formatIndexes(indexes)}
 	}
 }
 
@@ -1035,12 +1101,12 @@ func formatIndexes(indexes []db.Index) string {
 }
 
 func (m *Model) exportCmd(kind string) tea.Cmd {
-	rs := m.results.Result()
+	rs := m.results.OrderedResult()
 	if rs == nil {
 		m.setStatus(m.t.T(i18n.KeyStatusNoResults), true)
 		return nil
 	}
-	name := fmt.Sprintf("bdb-export-%s.%s", time.Now().Format("20060102-150405"), kind)
+	name := fmt.Sprintf("bdb-export-%s.%s", time.Now().Format("20060102-150405.000000000"), kind)
 	path := filepath.Join(m.outDir, name)
 	return func() tea.Msg {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
@@ -1058,186 +1124,11 @@ func (m *Model) exportCmd(kind string) tea.Cmd {
 			err = closeErr
 		}
 		if err != nil {
+			_ = os.Remove(path)
 			return exportedMsg{err: err}
 		}
 		return exportedMsg{path: path}
 	}
-}
-
-func (m *Model) layout() {
-	if m.width < 20 || m.height < 6 {
-		return
-	}
-	mainH := m.height - 2
-	if m.effectiveZoom() {
-		switch m.focus {
-		case focusEditor:
-			m.sideW, m.rightW = 0, m.width
-			m.editorH, m.resultsH = mainH, 0
-		case focusResults:
-			m.sideW, m.rightW = 0, m.width
-			m.editorH, m.resultsH = 0, mainH
-		default:
-			m.sideW, m.rightW = m.width, 0
-			m.editorH, m.resultsH = 0, 0
-		}
-		m.sidebar.SetSize(max(1, m.sideW), mainH)
-		m.editor.SetSize(max(1, m.rightW), max(1, m.editorH-1))
-		m.results.SetSize(max(1, m.rightW), max(1, m.resultsH-1))
-		return
-	}
-
-	sideW := m.width / 4
-	if sideW < 25 {
-		sideW = 25
-	}
-	if m.width < 70 {
-		sideW = m.width / 3
-	}
-	if preferred := m.sidebar.PreferredWidth(); sideW < preferred {
-		sideW = preferred
-	}
-	if sideW > 40 {
-		sideW = 40
-	}
-	if sideW > m.width-20 {
-		sideW = m.width - 20
-	}
-	rightW := m.width - sideW - 1
-
-	editorH := mainH / 3
-	if editorH < 6 {
-		editorH = 6
-	}
-	if editorH > mainH-5 {
-		editorH = mainH - 5
-	}
-	if editorH < 3 {
-		editorH = 3
-	}
-	resultsH := mainH - editorH - 1
-	if resultsH < 1 {
-		resultsH = 1
-	}
-
-	m.sideW, m.rightW, m.editorH, m.resultsH = sideW, rightW, editorH, resultsH
-	m.sidebar.SetSize(sideW, mainH)
-	m.editor.SetSize(rightW, editorH-1)
-	m.results.SetSize(rightW, resultsH-1)
-}
-
-func (m *Model) render() string {
-	if m.width <= 0 || m.height <= 0 {
-		return "Loading…"
-	}
-	if m.showHelp {
-		return m.renderHelp()
-	}
-	if m.detail.IsOpen() {
-		return m.detail.View()
-	}
-	base := m.renderMain()
-	if m.options.IsOpen() {
-		return textutil.Overlay(base, m.options.View(), m.width, m.height)
-	}
-	if m.tableMenu.IsOpen() {
-		return textutil.Overlay(base, m.tableMenu.View(), m.width, m.height)
-	}
-	if m.textView.IsOpen() {
-		return m.textView.View()
-	}
-	if m.cellEdit.IsOpen() {
-		return textutil.Overlay(base, m.cellEdit.View(), m.width, m.height)
-	}
-	if m.confirm.IsOpen() {
-		return textutil.Overlay(base, m.confirm.View(), m.width, m.height)
-	}
-	if m.connForm.IsOpen() {
-		return textutil.Overlay(base, m.connForm.View(), m.width, m.height)
-	}
-	if m.completion.IsOpen() {
-		return textutil.Overlay(base, m.completion.View(), m.width, m.height)
-	}
-	return base
-}
-
-func (m *Model) renderMain() string {
-	if m.width < 40 || m.height < 10 {
-		return textutil.FitLines(theme.Error.Render(m.t.T(i18n.KeyTerminalTooSmall)), m.width, m.height)
-	}
-
-	mainH := m.height - 2
-	var body string
-	if m.effectiveZoom() {
-		switch m.focus {
-		case focusEditor:
-			body = renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.editor.View(), m.width, mainH)
-		case focusResults:
-			body = renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.width, mainH)
-		default:
-			body = renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.width, mainH)
-		}
-	} else {
-		side := renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.sideW, mainH)
-		editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.editor.View(), m.rightW, m.editorH)
-		resultsView := renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.rightW, m.resultsH)
-		right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
-		separator := strings.Repeat("│\n", mainH-1) + "│"
-		body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
-	}
-
-	m.statusbar.Width = m.width
-	m.statusbar.Left = m.statusLeft()
-	m.statusbar.Right = m.status
-	m.statusbar.IsError = m.statusErr
-	menu := theme.MenuBar.Render(textutil.FitLine(" "+m.t.T(i18n.KeyMenuBarHint), m.width))
-	return body + "\n" + m.statusbar.View() + "\n" + menu
-}
-
-func (m *Model) renderHelp() string {
-	sections := []struct {
-		title string
-		keys  string
-	}{
-		{m.t.T(i18n.KeyHelpGlobal), m.t.T(i18n.KeyHelpGlobalKeys)},
-		{m.t.T(i18n.KeyHelpSidebar), m.t.T(i18n.KeyHelpSidebarKeys)},
-		{m.t.T(i18n.KeyHelpEditor), m.t.T(i18n.KeyHelpEditorKeys)},
-		{m.t.T(i18n.KeyHelpResults), m.t.T(i18n.KeyHelpResultsKeys)},
-	}
-	lines := []string{theme.Title.Render(m.t.T(i18n.KeyHelpTitle)), ""}
-	for _, section := range sections {
-		lines = append(lines, theme.Header.Render(section.title), "  "+section.keys)
-	}
-	lines = append(lines, "",
-		theme.Muted.Render(m.t.T(i18n.KeyMenuHint)),
-		theme.Muted.Render(m.t.T(i18n.KeyHelpClose)),
-	)
-
-	maxWidth := max(20, m.width-8)
-	for i, line := range lines {
-		lines[i] = textutil.Truncate(line, maxWidth)
-	}
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(1, 2).
-		Render(strings.Join(lines, "\n"))
-	return center(box, m.width, m.height)
-}
-
-func (m *Model) statusLeft() string {
-	parts := []string{m.t.T(i18n.KeyAppTitle)}
-	switch m.focus {
-	case focusSidebar:
-		parts = append(parts, m.t.T(i18n.KeyPaneConnections))
-	case focusEditor:
-		parts = append(parts, m.t.T(i18n.KeyPaneSQL))
-	case focusResults:
-		parts = append(parts, m.t.T(i18n.KeyPaneResults))
-	}
-	if m.connName != "" {
-		parts = append(parts, "● "+m.connName)
-	}
-	return strings.Join(parts, "  ")
 }
 
 func (m *Model) runMenuAction(msg menu.ActionMsg) tea.Cmd {
@@ -1300,10 +1191,12 @@ func (m *Model) applyMenuChange(msg menu.ChangedMsg) {
 }
 
 func (m *Model) disconnect() {
+	m.connectSeq++
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
 	}
+	m.cancelMutation()
 	m.running = false
 	if m.conn != nil {
 		m.conn.Close()
@@ -1339,10 +1232,12 @@ func (m *Model) saveCurrentSession() {
 	if m.conn == nil || m.connName == "" {
 		return
 	}
+	m.connectSeq++
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
 	}
+	m.cancelMutation()
 	m.running = false
 	m.querySeq++
 	m.sessions[m.connName] = &session{
@@ -1490,224 +1385,6 @@ func (m *Model) readOnly() bool {
 	return c != nil && c.ReadOnly
 }
 
-func editInfoKey(schema, table string) string {
-	return schema + "." + table
-}
-
-func (m *Model) editInfoCmd(schema, table, action string) tea.Cmd {
-	if info, ok := m.editCache[editInfoKey(schema, table)]; ok {
-		return m.useEditInfo(schema, table, action, info)
-	}
-	conn := m.conn
-	if conn == nil {
-		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
-		return nil
-	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		columns, err := conn.Catalog().Columns(ctx, schema, table)
-		if err != nil {
-			return editInfoMsg{schema: schema, table: table, action: action, err: err}
-		}
-		primary := make([]string, 0, len(columns))
-		for _, column := range columns {
-			if column.PrimaryKey {
-				primary = append(primary, column.Name)
-			}
-		}
-		return editInfoMsg{schema: schema, table: table, action: action, columns: columns, primary: primary}
-	}
-}
-
-func (m *Model) handleEditInfo(msg editInfoMsg) tea.Cmd {
-	if msg.err != nil {
-		m.setStatus(m.t.T(i18n.KeyErrorEdit, msg.err), true)
-		return nil
-	}
-	info := editInfo{columns: msg.columns, primary: msg.primary}
-	m.editCache[editInfoKey(msg.schema, msg.table)] = info
-	return m.useEditInfo(msg.schema, msg.table, msg.action, info)
-}
-
-func (m *Model) useEditInfo(schema, table, action string, info editInfo) tea.Cmd {
-	switch action {
-	case "insert":
-		return m.insertTemplate(schema, table, info.columns)
-	case "delete":
-		m.openDeleteConfirm(schema, table, info)
-	default:
-		m.openCellEditor(schema, table, info)
-	}
-	return nil
-}
-
-func (m *Model) beginCellEdit() tea.Cmd {
-	schema, table, ok := m.results.Source()
-	if !ok {
-		m.setStatus(m.t.T(i18n.KeyErrorEditSource), true)
-		return nil
-	}
-	if m.readOnly() {
-		m.setStatus(m.t.T(i18n.KeyErrorReadOnly), true)
-		return nil
-	}
-	return m.editInfoCmd(schema, table, "edit")
-}
-
-func (m *Model) beginDeleteRow() tea.Cmd {
-	schema, table, ok := m.results.Source()
-	if !ok {
-		m.setStatus(m.t.T(i18n.KeyErrorEditSource), true)
-		return nil
-	}
-	if m.readOnly() {
-		m.setStatus(m.t.T(i18n.KeyErrorReadOnly), true)
-		return nil
-	}
-	return m.editInfoCmd(schema, table, "delete")
-}
-
-func (m *Model) openCellEditor(schema, table string, info editInfo) {
-	if len(info.primary) == 0 {
-		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
-		return
-	}
-	key, ok := m.results.RowKey(info.primary)
-	if !ok {
-		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
-		return
-	}
-	column := m.results.CursorColumnName()
-	if column == "" {
-		return
-	}
-	dataType := ""
-	for _, c := range info.columns {
-		if c.Name == column {
-			dataType = c.DataType
-			break
-		}
-	}
-	m.editTarget = editTarget{
-		table:    db.TableRef{Schema: schema, Name: table},
-		column:   column,
-		dataType: dataType,
-		key:      key,
-	}
-	title := fmt.Sprintf(m.t.T(i18n.KeyCellEditTitle), qualifiedTable(schema, table)+"."+column)
-	m.cellEdit.Open(title, m.results.CursorCell())
-}
-
-func (m *Model) openDeleteConfirm(schema, table string, info editInfo) {
-	if len(info.primary) == 0 {
-		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
-		return
-	}
-	key, ok := m.results.RowKey(info.primary)
-	if !ok {
-		m.setStatus(m.t.T(i18n.KeyErrorNoPrimaryKey), true)
-		return
-	}
-	mut := m.conn.Mutator()
-	if mut == nil {
-		m.setStatus(m.t.T(i18n.KeyErrorMutation, "mutations are not supported"), true)
-		return
-	}
-	tableRef := db.TableRef{Schema: schema, Name: table}
-	m.pendingCmd = m.mutationCmd("delete", func(ctx context.Context, mut db.Mutator) (int64, error) {
-		return mut.DeleteRow(ctx, tableRef, key)
-	})
-	m.confirm.Open(m.t.T(i18n.KeyConfirmDelete), mut.PreviewDelete(tableRef, key))
-}
-
-func (m *Model) openUpdateConfirm(raw string) tea.Cmd {
-	target := m.editTarget
-	if target.column == "" || m.conn == nil {
-		return nil
-	}
-	mut := m.conn.Mutator()
-	if mut == nil {
-		m.setStatus(m.t.T(i18n.KeyErrorMutation, "mutations are not supported"), true)
-		return nil
-	}
-	value := parseCellValue(raw, target.dataType)
-	m.pendingCmd = m.mutationCmd("update", func(ctx context.Context, mut db.Mutator) (int64, error) {
-		return mut.UpdateCell(ctx, target.table, target.key, target.column, value)
-	})
-	m.confirm.Open(m.t.T(i18n.KeyConfirmUpdate), mut.PreviewUpdate(target.table, target.key, target.column, value))
-	return nil
-}
-
-func (m *Model) mutationCmd(kind string, run func(context.Context, db.Mutator) (int64, error)) tea.Cmd {
-	mut := m.conn.Mutator()
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		affected, err := run(ctx, mut)
-		return mutationDoneMsg{kind: kind, affected: affected, err: err}
-	}
-}
-
-func (m *Model) handleMutationDone(msg mutationDoneMsg) tea.Cmd {
-	if msg.err != nil {
-		m.setStatus(m.t.T(i18n.KeyErrorMutation, msg.err), true)
-		return nil
-	}
-	if msg.kind == "delete" {
-		m.setStatus(m.t.T(i18n.KeyStatusDeleted), false)
-	} else {
-		m.setStatus(m.t.T(i18n.KeyStatusUpdated), false)
-	}
-	return m.refreshSource()
-}
-
-func (m *Model) refreshSource() tea.Cmd {
-	schema, table, ok := m.results.Source()
-	if !ok {
-		return nil
-	}
-	stmt := fmt.Sprintf(m.t.T(i18n.KeyQuerySelectTable), qualifiedTable(schema, table))
-	m.editor.SetValue(stmt)
-	m.pendingSource = &db.TableRef{Schema: schema, Name: table}
-	return m.runQuery()
-}
-
-func (m *Model) insertTemplate(schema, table string, columns []db.Column) tea.Cmd {
-	names := make([]string, 0, len(columns))
-	values := make([]string, 0, len(columns))
-	for _, column := range columns {
-		names = append(names, column.Name)
-		values = append(values, "NULL")
-	}
-	stmt := fmt.Sprintf(m.t.T(i18n.KeyQueryInsertTemplate), qualifiedTable(schema, table), strings.Join(names, ", "), strings.Join(values, ", "))
-	m.editor.SetValue(stmt)
-	m.focus = focusEditor
-	m.layout()
-	return m.editor.Focus()
-}
-
-func parseCellValue(raw, dataType string) any {
-	trimmed := strings.TrimSpace(raw)
-	kind := strings.ToLower(dataType)
-	switch {
-	case strings.Contains(kind, "int"), strings.Contains(kind, "serial"):
-		if value, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
-			return value
-		}
-	case strings.Contains(kind, "numeric"), strings.Contains(kind, "decimal"),
-		strings.Contains(kind, "real"), strings.Contains(kind, "double"), strings.Contains(kind, "float"):
-		if value, err := strconv.ParseFloat(trimmed, 64); err == nil {
-			return value
-		}
-	case strings.Contains(kind, "bool"):
-		if value, err := strconv.ParseBool(trimmed); err == nil {
-			return value
-		}
-	}
-	return raw
-}
-
 func (m *Model) openDetail(schema, table string) tea.Cmd {
 	if m.conn == nil {
 		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
@@ -1716,22 +1393,23 @@ func (m *Model) openDetail(schema, table string) tea.Cmd {
 	m.detail.Open(schema, table)
 	conn := m.conn
 	title := m.detail.Title()
+	id := m.connectSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		columns, err := conn.Catalog().Columns(ctx, schema, table)
 		if err != nil {
-			return detailLoadedMsg{title: title, err: err}
+			return detailLoadedMsg{id: id, title: title, err: err}
 		}
 		indexes, err := conn.Catalog().Indexes(ctx, schema, table)
 		if err != nil {
-			return detailLoadedMsg{title: title, err: err}
+			return detailLoadedMsg{id: id, title: title, err: err}
 		}
 		fks, err := conn.Catalog().ForeignKeys(ctx, schema, table)
 		if err != nil {
-			return detailLoadedMsg{title: title, err: err}
+			return detailLoadedMsg{id: id, title: title, err: err}
 		}
-		return detailLoadedMsg{title: title, columns: columns, indexes: indexes, fks: fks}
+		return detailLoadedMsg{id: id, title: title, columns: columns, indexes: indexes, fks: fks}
 	}
 }
 
@@ -1748,21 +1426,30 @@ func (m *Model) runScriptCmd(path string) tea.Cmd {
 	m.running = true
 	m.setStatus(m.t.T(i18n.KeyStatusRunning), false)
 	executor := m.executor
+	readOnly := m.readOnly()
+	readOnlyErr := errors.New(m.t.T(i18n.KeyErrorReadOnly))
+	dialect := m.conn.Type()
+	id := m.connectSeq
 
 	return func() tea.Msg {
 		start := time.Now()
 		data, err := os.ReadFile(path)
 		if err != nil {
 			cancel()
-			return scriptDoneMsg{err: err, elapsed: time.Since(start)}
+			return scriptDoneMsg{id: id, err: err, elapsed: time.Since(start)}
 		}
-		statements, err := sqlscript.Split(string(data))
+		statements, err := sqlscript.SplitFor(string(data), dialect)
 		if err != nil {
 			cancel()
-			return scriptDoneMsg{err: err, elapsed: time.Since(start)}
+			return scriptDoneMsg{id: id, err: err, elapsed: time.Since(start)}
 		}
-		msg := scriptDoneMsg{total: len(statements)}
+		msg := scriptDoneMsg{id: id, total: len(statements)}
 		for i, stmt := range statements {
+			if readOnly && query.IsWriteFor(dialect, stmt) {
+				msg.err = readOnlyErr
+				msg.failedAt = i + 1
+				break
+			}
 			out := executor.Run(ctx, stmt)
 			if out.Err != nil {
 				msg.err = out.Err
@@ -1784,6 +1471,9 @@ func (m *Model) runScriptCmd(path string) tea.Cmd {
 }
 
 func (m *Model) handleScriptDone(msg scriptDoneMsg) {
+	if msg.id != m.connectSeq {
+		return
+	}
 	m.running = false
 	if m.cancel != nil {
 		m.cancel()
@@ -1851,6 +1541,7 @@ func (m *Model) loadColumnsCmd(qualifier string) tea.Cmd {
 	if conn == nil {
 		return nil
 	}
+	id := m.connectSeq
 	schema, table := "", qualifier
 	if i := strings.LastIndex(qualifier, "."); i >= 0 {
 		schema, table = qualifier[:i], qualifier[i+1:]
@@ -1862,13 +1553,13 @@ func (m *Model) loadColumnsCmd(qualifier string) tea.Cmd {
 		defer cancel()
 		columns, err := conn.Catalog().Columns(ctx, schema, table)
 		if err != nil {
-			return completionColumnsMsg{table: qualifier, err: err}
+			return completionColumnsMsg{id: id, table: qualifier, err: err}
 		}
 		names := make([]string, 0, len(columns))
 		for _, column := range columns {
 			names = append(names, column.Name)
 		}
-		return completionColumnsMsg{table: qualifier, columns: names}
+		return completionColumnsMsg{id: id, table: qualifier, columns: names}
 	}
 }
 
@@ -1877,19 +1568,20 @@ func (m *Model) loadCompletionTablesCmd() tea.Cmd {
 	if conn == nil {
 		return nil
 	}
+	id := m.connectSeq
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		schemas, err := conn.Catalog().Schemas(ctx)
 		if err != nil {
-			return completionTablesMsg{err: err}
+			return completionTablesMsg{id: id, err: err}
 		}
 		seen := map[string]bool{}
 		var refs []tableRef
 		for _, schema := range schemas {
 			objects, err := conn.Catalog().Tables(ctx, schema)
 			if err != nil {
-				return completionTablesMsg{err: err}
+				return completionTablesMsg{id: id, err: err}
 			}
 			for _, object := range objects {
 				key := strings.ToLower(object.Name)
@@ -1900,15 +1592,17 @@ func (m *Model) loadCompletionTablesCmd() tea.Cmd {
 				refs = append(refs, tableRef{Name: object.Name, Schema: object.Schema})
 			}
 		}
-		return completionTablesMsg{tables: refs}
+		return completionTablesMsg{id: id, tables: refs}
 	}
 }
 
 func (m *Model) shutdown() {
+	m.connectSeq++
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
 	}
+	m.cancelMutation()
 	if m.conn != nil {
 		m.conn.Close()
 		m.conn = nil
@@ -1929,57 +1623,28 @@ func (m *Model) addConnection(conn config.Connection) tea.Cmd {
 		m.connForm.SetError(m.t.T(i18n.KeyFormDuplicate, conn.Name))
 		return nil
 	}
+	resolved, err := config.ExpandConnection(conn)
+	if err != nil {
+		m.connForm.SetError(err.Error())
+		return nil
+	}
+	if m.cfg.Find(resolved.Name) != nil {
+		m.connForm.SetError(m.t.T(i18n.KeyFormDuplicate, resolved.Name))
+		return nil
+	}
 	if err := config.AppendRuntimeConnection(conn); err != nil {
 		m.connForm.SetError(m.t.T(i18n.KeyErrorSaveConnection, err))
 		return nil
 	}
-	m.cfg.Connections = append(m.cfg.Connections, conn)
-	m.sidebar.AddConnection(conn)
-	m.setStatus(m.t.T(i18n.KeyStatusConnectionAdded, conn.Name), false)
-	return m.connectCmd(conn.Name)
+	m.cfg.Connections = append(m.cfg.Connections, resolved)
+	m.sidebar.AddConnection(resolved)
+	m.setStatus(m.t.T(i18n.KeyStatusConnectionAdded, resolved.Name), false)
+	return m.connectCmd(resolved.Name)
 }
 
 func (m *Model) setStatus(text string, isError bool) {
 	m.status = text
 	m.statusErr = isError
-}
-
-func renderPane(title, hint, body string, width, height int) string {
-	if width <= 0 || height <= 0 {
-		return ""
-	}
-	left := theme.Title.Render(" " + title)
-	right := ""
-	if hint != "" && textutil.Width(hint)+textutil.Width(title)+6 < width {
-		right = theme.Muted.Render(hint + " ")
-	}
-	gap := width - textutil.Width(left) - textutil.Width(right)
-	if gap < 0 {
-		gap = 0
-	}
-	titleLine := textutil.FitLine(left+strings.Repeat(" ", gap)+right, width)
-	if height == 1 {
-		return titleLine
-	}
-	return titleLine + "\n" + textutil.FitLines(body, width, height-1)
-}
-
-func center(content string, width, height int) string {
-	lines := strings.Split(content, "\n")
-	contentW := 0
-	for _, line := range lines {
-		contentW = max(contentW, textutil.Width(line))
-	}
-	left := max(0, (width-contentW)/2)
-	top := max(0, (height-len(lines))/2)
-	out := make([]string, 0, height)
-	for i := 0; i < top && len(out) < height; i++ {
-		out = append(out, "")
-	}
-	for _, line := range lines {
-		out = append(out, strings.Repeat(" ", left)+line)
-	}
-	return textutil.FitLines(strings.Join(out, "\n"), width, height)
 }
 
 func toDBConfig(c *config.Connection) db.Config {

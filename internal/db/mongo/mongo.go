@@ -231,7 +231,11 @@ func (q querier) Query(ctx context.Context, stmt string, maxRows int) (*db.Resul
 			result = documentsToResult([]bson.M{doc}, maxRows)
 		}
 	default:
-		cursor, err := collection.Find(ctx, request.filter, options.Find().SetLimit(int64(maxRows)))
+		limit := int64(0)
+		if maxRows > 0 {
+			limit = int64(maxRows) + 1
+		}
+		cursor, err := collection.Find(ctx, request.filter, options.Find().SetLimit(limit))
 		if err != nil {
 			return nil, err
 		}
@@ -305,8 +309,10 @@ func parseCommand(stmt string) (command, error) {
 func documentsResult(ctx context.Context, cursor *mongo.Cursor, maxRows int) (*db.ResultSet, error) {
 	defer cursor.Close(ctx)
 	docs := make([]bson.M, 0, 32)
+	truncated := false
 	for cursor.Next(ctx) {
 		if maxRows > 0 && len(docs) >= maxRows {
+			truncated = true
 			break
 		}
 		var doc bson.M
@@ -318,7 +324,9 @@ func documentsResult(ctx context.Context, cursor *mongo.Cursor, maxRows int) (*d
 	if err := cursor.Err(); err != nil {
 		return nil, err
 	}
-	return documentsToResult(docs, maxRows), nil
+	result := documentsToResult(docs, maxRows)
+	result.Truncated = truncated
+	return result, nil
 }
 
 func documentsToResult(docs []bson.M, maxRows int) *db.ResultSet {
@@ -357,8 +365,10 @@ func formatMongoValue(value any) any {
 	switch v := value.(type) {
 	case nil:
 		return nil
-	case string, bool, int32, int64, float64:
+	case string, bool, int64, float64:
 		return v
+	case int32:
+		return int64(v)
 	case bson.ObjectID:
 		return v.Hex()
 	case time.Time:

@@ -106,7 +106,7 @@ connections:
 ./bin/bdb --config config.yaml ./migrations/001_init.sql
 ```
 
-脚本按分号切分，支持单引号/双引号/反引号字符串、`--`、`#`、`/* */` 注释；任一语句失败会停止并报告语句序号。执行期间可按 `Esc` 取消。
+脚本按分号切分，支持单引号/双引号/反引号字符串、`--`、`/* */` 注释；MySQL 下支持 `#` 注释与 `DELIMITER`，PostgreSQL 下支持 `$tag$...$tag$` dollar-quoting 并保留 `#` 运算符。任一语句失败会停止并报告语句序号。执行期间可按 `Esc` 取消。
 
 ## 添加数据源
 
@@ -138,7 +138,7 @@ connections:
 - 字段较多时，`←`/`→` 移动单元格会自动横向滚动；`H`/`L` 直接向左/右翻一屏列，`Home`/`End` 跳到首列/末列
 - 单元格内容超过列宽时仍会截断显示；选中后按 `Enter` 或 `v` 打开完整内容查看器
 - 查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc` 或 `q` 关闭
-- `[`/`]` 调整当前列宽，`o`/`O` 排序，`c` 复制单元格
+- `[`/`]` 调整当前列宽，`o`/`O` 排序，`c` 复制单元格；导出会遵循当前排序
 
 ## 数据编辑
 
@@ -147,7 +147,7 @@ connections:
 - `e` 编辑当前单元格：输入新值 → 预览 `UPDATE` SQL → `y` 确认执行
 - `x` 删除当前行：预览 `DELETE` SQL → `y` 确认执行
 - 写入在事务中执行，影响行数必须为 1
-- 连接配置 `read_only: true` 时禁止编辑
+- 连接配置 `read_only: true` 时禁止单元格编辑和 SQL 写入语句，并额外拦截：SQL 的 `EXECUTE`、SQLite 的写入型 `PRAGMA`；Redis 中只放行常见只读命令，其余（含 `EVAL`/`FCALL`、`SETBIT`、`SORT ... STORE` 等）一律拒绝；MongoDB 的 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 一律拒绝。这是保守的客户端检查，仍建议使用数据库只读账号或只读副本作为真正的安全边界。
 - 表操作菜单的「Insert row template」会生成 `INSERT` 模板到编辑器
 
 ## Redis 与 MongoDB
@@ -176,7 +176,7 @@ MongoDB：
 
 在侧栏选中表后按 `Enter` 打开：
 
-- **View data**：生成 `SELECT *` 并立即执行
+- **View data**：生成带 `query.max_rows` 限制的 `SELECT *` 并立即执行
 - **View DDL**：查看建表语句（MySQL 使用 `SHOW CREATE TABLE`，SQLite 读取 `sqlite_master`，PostgreSQL 根据 catalog 生成）
 - **View structure**：列、索引、外键详情
 - **View indexes**：索引列表
@@ -194,7 +194,7 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 ## 主题
 
-内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或按 `Esc` 打开选项菜单后用 `←`/`→` 切换。运行时选择会写入 `$XDG_STATE_HOME/bdb/theme`，下次启动自动恢复。
+内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或按 `Esc` 打开选项菜单后用 `←`/`→` 切换。运行时选择会写入 `$XDG_STATE_HOME/bdb/theme`，下次启动自动恢复；该状态文件优先于 `ui.theme`，若想改回配置文件中的主题，请先删除此状态文件。
 
 ## 查询历史
 

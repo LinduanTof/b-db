@@ -63,3 +63,18 @@ func TestDocumentsToResult(t *testing.T) {
 		t.Fatalf("active = %#v", rs.Rows[1][index["active"]])
 	}
 }
+
+func TestFormatMongoValueNormalizesInt32(t *testing.T) {
+	if got := formatMongoValue(int32(30)); got != int64(30) {
+		t.Fatalf("int32 = %#v", got)
+	}
+}
+
+func FuzzParseCommand(f *testing.F) {
+	f.Add(`find mydb.users {"name":"Alice"}`)
+	f.Add(`aggregate mydb.users [{"$match":{"name":"Alice"}}]`)
+	f.Add(`count mydb.users`)
+	f.Fuzz(func(t *testing.T, stmt string) {
+		_, _ = parseCommand(stmt)
+	})
+}

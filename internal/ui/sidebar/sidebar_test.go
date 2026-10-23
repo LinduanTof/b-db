@@ -75,3 +75,17 @@ func TestHandleClickOutOfRange(t *testing.T) {
 		t.Fatal("negative row should do nothing")
 	}
 }
+
+func TestStaleLoadResultIsIgnored(t *testing.T) {
+	m := New(nil, i18n.New("en"))
+	m.epoch = 2
+	node := &Node{Kind: KindConnection, Loading: true}
+	m.Update(SchemasLoadedMsg{Epoch: 1, Node: node, Schemas: []string{"old"}})
+	if !node.Loading || len(node.Children) != 0 {
+		t.Fatalf("stale message mutated node: %+v", node)
+	}
+	m.Update(SchemasLoadedMsg{Epoch: 2, Node: node, Schemas: []string{"current"}})
+	if node.Loading || len(node.Children) != 1 {
+		t.Fatalf("current message not applied: %+v", node)
+	}
+}

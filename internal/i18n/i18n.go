@@ -112,7 +112,7 @@ var en = map[string]string{
 	KeyErrorIndexes:            "failed to load indexes: %v",
 	KeyCellTitle:               "Cell: %s",
 	KeyCellEditTitle:           "Edit %s",
-	KeyCellEditHint:            "enter: preview   esc: cancel",
+	KeyCellEditHint:            "enter: preview   esc: cancel   NULL: set null",
 	KeyConfirmUpdate:           "Confirm update",
 	KeyConfirmDelete:           "Confirm delete",
 	KeyConfirmHint:             "y/enter: execute   n/esc: cancel",
@@ -120,6 +120,7 @@ var en = map[string]string{
 	KeyErrorNoPrimaryKey:       "this table has no primary key; editing is disabled",
 	KeyErrorReadOnly:           "connection is read-only",
 	KeyErrorMutation:           "write failed: %v",
+	KeyErrorInvalidValue:       "invalid value %q for column type %s",
 	KeyErrorEdit:               "failed to load table info: %v",
 	KeyErrorUnsupportedFeature: "not supported for %s",
 	KeyStatusUpdated:           "1 row updated",
@@ -137,16 +138,10 @@ var en = map[string]string{
 	KeyHelpEditorKeys:  "ctrl+enter or f5: execute   ctrl+space: complete   ctrl+p: previous query   ctrl+n: next query   esc: cancel",
 	KeyHelpResultsKeys: "arrows/hjkl: move cell   H/L: scroll columns   enter/v: view full cell   e: edit cell   x: delete row   [/]: width   o: sort   c: copy   ctrl+e/j/m: export",
 	KeyHelpClose:       "press ? or esc to close",
-	KeyHelpCommands:    "Commands",
-	KeyHelpCommandsTip: "press ':' to open the command palette",
-
-	KeyCommandTitle: "Command palette",
-	KeyCommandHint:  "enter: run   tab: complete   esc: close",
 
 	KeyCompletionTitle: "Completions",
 	KeyCompletionHint:  "tab/enter: accept   esc: close",
 
-	KeyCmdConnect:    "connect to a configured connection",
 	KeyCmdDisconnect: "close the current connection",
 	KeyCmdExport:     "export current results (csv or json)",
 	KeyCmdFocus:      "move focus to sidebar, editor or results",
@@ -212,14 +207,10 @@ var en = map[string]string{
 	KeyTerminalTooSmall: "Terminal too small — resize to at least 40x10",
 	KeyNoConnections:    "No connections configured; edit %s or press a to add one",
 
-	KeyObjectTable:  "table",
-	KeyObjectView:   "view",
-	KeyObjectColumn: "column",
+	KeyQuerySelectTable: "SELECT * FROM %s LIMIT %d;",
 
-	KeyQuerySelectTable: "SELECT * FROM %s LIMIT 100;",
-
-	KeyNoRows:      "No rows",
-	KeyResultsNull: "NULL",
+	KeyNoRows:          "No rows",
+	KeyResultsAffected: "%d row(s) affected in %s",
 }
 
 var zh = map[string]string{
@@ -274,7 +265,7 @@ var zh = map[string]string{
 	KeyErrorIndexes:            "加载索引失败：%v",
 	KeyCellTitle:               "单元格：%s",
 	KeyCellEditTitle:           "编辑 %s",
-	KeyCellEditHint:            "enter: 预览   esc: 取消",
+	KeyCellEditHint:            "enter: 预览   esc: 取消   NULL: 设为 NULL",
 	KeyConfirmUpdate:           "确认更新",
 	KeyConfirmDelete:           "确认删除",
 	KeyConfirmHint:             "y/enter: 执行   n/esc: 取消",
@@ -282,6 +273,7 @@ var zh = map[string]string{
 	KeyErrorNoPrimaryKey:       "该表没有主键，无法编辑",
 	KeyErrorReadOnly:           "连接为只读模式",
 	KeyErrorMutation:           "写入失败：%v",
+	KeyErrorInvalidValue:       "值 %q 与列类型 %s 不匹配",
 	KeyErrorEdit:               "加载表信息失败：%v",
 	KeyErrorUnsupportedFeature: "%s 不支持该操作",
 	KeyStatusUpdated:           "已更新 1 行",
@@ -299,16 +291,10 @@ var zh = map[string]string{
 	KeyHelpEditorKeys:  "ctrl+enter 或 f5: 执行   ctrl+space: 补全   ctrl+p: 上一条   ctrl+n: 下一条   esc: 取消",
 	KeyHelpResultsKeys: "方向键/hjkl: 移动单元格   H/L: 横向滚动   enter/v: 查看完整内容   e: 编辑单元格   x: 删除行   [/]: 列宽   o: 排序   c: 复制   ctrl+e/j/m: 导出",
 	KeyHelpClose:       "按 ? 或 esc 关闭",
-	KeyHelpCommands:    "命令",
-	KeyHelpCommandsTip: "按 ':' 打开命令面板",
-
-	KeyCommandTitle: "命令面板",
-	KeyCommandHint:  "enter: 执行   tab: 补全   esc: 关闭",
 
 	KeyCompletionTitle: "补全",
 	KeyCompletionHint:  "tab/enter: 接受   esc: 关闭",
 
-	KeyCmdConnect:    "连接到指定连接",
 	KeyCmdDisconnect: "断开当前连接",
 	KeyCmdExport:     "导出当前结果（csv 或 json）",
 	KeyCmdFocus:      "切换焦点到侧栏、编辑器或结果",
@@ -374,12 +360,8 @@ var zh = map[string]string{
 	KeyTerminalTooSmall: "终端窗口过小，请调整到至少 40x10",
 	KeyNoConnections:    "尚未配置连接，请编辑 %s 或按 a 添加",
 
-	KeyObjectTable:  "表",
-	KeyObjectView:   "视图",
-	KeyObjectColumn: "列",
+	KeyQuerySelectTable: "SELECT * FROM %s LIMIT %d;",
 
-	KeyQuerySelectTable: "SELECT * FROM %s LIMIT 100;",
-
-	KeyNoRows:      "没有数据",
-	KeyResultsNull: "NULL",
+	KeyNoRows:          "没有数据",
+	KeyResultsAffected: "影响 %d 行，耗时 %s",
 }

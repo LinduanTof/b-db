@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -182,8 +183,12 @@ func Load(path string) (*Config, []string, error) {
 	case err != nil:
 		return nil, nil, fmt.Errorf("read config %s: %w", path, err)
 	default:
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
-			return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
+		if len(bytes.TrimSpace(data)) > 0 {
+			dec := yaml.NewDecoder(bytes.NewReader(data))
+			dec.KnownFields(true)
+			if err := dec.Decode(&cfg); err != nil {
+				return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
+			}
 		}
 		if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
 			warnings = append(warnings, fmt.Sprintf("config file %s is readable by other users (mode %04o); consider chmod 600", path, info.Mode().Perm()))
@@ -277,6 +282,16 @@ func (c *Config) expandEnv() error {
 	return nil
 }
 
+// ExpandConnection returns a copy of conn with ${VAR} references resolved.
+// The original value is left untouched so it can still be persisted without
+// writing secrets to disk.
+func ExpandConnection(conn Connection) (Connection, error) {
+	if err := conn.expandEnv(); err != nil {
+		return Connection{}, err
+	}
+	return conn, nil
+}
+
 func (c Connection) validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name is required")
@@ -349,6 +364,10 @@ func (c Connection) EffectivePort() int {
 		return 5432
 	case TypeMySQL:
 		return 3306
+	case TypeMongo:
+		return 27017
+	case TypeRedis:
+		return 6379
 	}
 	return 0
 }

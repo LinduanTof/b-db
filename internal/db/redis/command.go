@@ -3,6 +3,7 @@ package redis
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/LinduanTof/b-db/internal/db"
@@ -13,17 +14,20 @@ func splitCommand(input string) ([]string, error) {
 	var current strings.Builder
 	var quote rune
 	escaped := false
+	started := false
 
 	flush := func() {
-		if current.Len() > 0 {
+		if started {
 			out = append(out, current.String())
 			current.Reset()
+			started = false
 		}
 	}
 
 	for _, r := range input {
 		if escaped {
 			current.WriteRune(r)
+			started = true
 			escaped = false
 			continue
 		}
@@ -37,17 +41,21 @@ func splitCommand(input string) ([]string, error) {
 				continue
 			}
 			current.WriteRune(r)
+			started = true
 			continue
 		}
 		switch r {
 		case '\\':
 			escaped = true
+			started = true
 		case '\'', '"':
 			quote = r
+			started = true
 		case ' ', '\t', '\n', '\r':
 			flush()
 		default:
 			current.WriteRune(r)
+			started = true
 		}
 	}
 	if escaped {
@@ -85,8 +93,9 @@ func convert(command string, value any, maxRows int) *db.ResultSet {
 			rows = append(rows, []any{formatRedisValue(item)})
 		}
 		return &db.ResultSet{
-			Columns: []db.ColumnMeta{{Name: "value"}},
-			Rows:    rows,
+			Columns:   []db.ColumnMeta{{Name: "value"}},
+			Rows:      rows,
+			Truncated: maxRows > 0 && len(v) > maxRows,
 		}
 	case map[string]any:
 		pairs := make([]any, 0, len(v)*2)
@@ -94,7 +103,7 @@ func convert(command string, value any, maxRows int) *db.ResultSet {
 		for key := range v {
 			keys = append(keys, key)
 		}
-		sortStrings(keys)
+		sort.Strings(keys)
 		for _, key := range keys {
 			pairs = append(pairs, key, v[key])
 		}
@@ -105,7 +114,7 @@ func convert(command string, value any, maxRows int) *db.ResultSet {
 		for key := range v {
 			keys = append(keys, key)
 		}
-		sortStrings(keys)
+		sort.Strings(keys)
 		for _, key := range keys {
 			pairs = append(pairs, key, v[key])
 		}
@@ -127,8 +136,9 @@ func pairResult(values []any, maxRows int) *db.ResultSet {
 		rows = append(rows, []any{formatRedisValue(values[i]), formatRedisValue(values[i+1])})
 	}
 	return &db.ResultSet{
-		Columns: []db.ColumnMeta{{Name: "field"}, {Name: "value"}},
-		Rows:    rows,
+		Columns:   []db.ColumnMeta{{Name: "field"}, {Name: "value"}},
+		Rows:      rows,
+		Truncated: maxRows > 0 && len(values)/2 > maxRows,
 	}
 }
 
@@ -148,13 +158,5 @@ func formatRedisValue(value any) any {
 			return fmt.Sprint(v)
 		}
 		return string(encoded)
-	}
-}
-
-func sortStrings(values []string) {
-	for i := 1; i < len(values); i++ {
-		for j := i; j > 0 && values[j] < values[j-1]; j-- {
-			values[j], values[j-1] = values[j-1], values[j]
-		}
 	}
 }

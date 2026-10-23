@@ -104,7 +104,12 @@ func (sqliteDriver) Open(_ context.Context, cfg db.Config) (db.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newConn(cfg.Name, "sqlite", sqlDB, dialect.SQLite{}), nil
+	c := newConn(cfg.Name, "sqlite", sqlDB, dialect.SQLite{})
+	if path == ":memory:" {
+		c.db.SetMaxOpenConns(1)
+		c.db.SetMaxIdleConns(1)
+	}
+	return c, nil
 }
 
 type conn struct {

@@ -100,6 +100,23 @@ func (m *Model) SetError(text string) {
 
 func (m *Model) Result() *db.ResultSet { return m.rs }
 
+// OrderedResult returns a copy of the result with rows in the currently
+// displayed order, so exports respect client-side sorting.
+func (m Model) OrderedResult() *db.ResultSet {
+	if m.rs == nil {
+		return nil
+	}
+	out := *m.rs
+	if len(m.order) == len(m.rs.Rows) && len(m.order) > 0 {
+		rows := make([][]any, len(m.order))
+		for i, index := range m.order {
+			rows[i] = m.rs.Rows[index]
+		}
+		out.Rows = rows
+	}
+	return &out
+}
+
 func (m *Model) Clear() {
 	m.rs = nil
 	m.cells = nil
@@ -320,6 +337,23 @@ func (m Model) CursorCell() string {
 	return m.cells[row][m.cursorCol]
 }
 
+// CursorValue returns the raw value under the cursor together with whether a
+// cell exists. Unlike CursorCell it preserves NULL, newlines and other control
+// characters so callers can edit the value safely.
+func (m Model) CursorValue() (any, bool) {
+	if m.rs == nil || len(m.cells) == 0 || m.cursorRow >= len(m.cells) {
+		return nil, false
+	}
+	row := m.cursorRow
+	if row < len(m.order) {
+		row = m.order[row]
+	}
+	if row >= len(m.rs.Rows) || m.cursorCol >= len(m.rs.Rows[row]) {
+		return nil, false
+	}
+	return m.rs.Rows[row][m.cursorCol], true
+}
+
 func (m Model) CursorPosition() (row, col int) { return m.cursorRow, m.cursorCol }
 
 func (m *Model) SetSource(schema, table string) {
@@ -509,7 +543,7 @@ func (m *Model) View() string {
 		return textutil.FitLines(theme.Error.Render(m.errText), m.width, m.height)
 	}
 	if m.affected != nil {
-		line := fmt.Sprintf("%d row(s) affected in %s", *m.affected, humanDuration(m.elapsed))
+		line := fmt.Sprintf(m.t.T(i18n.KeyResultsAffected), *m.affected, humanDuration(m.elapsed))
 		return textutil.FitLines(theme.Muted.Render(line), m.width, m.height)
 	}
 	if m.rs == nil {

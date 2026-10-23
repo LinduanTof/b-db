@@ -31,3 +31,32 @@ func TestConvert(t *testing.T) {
 		t.Fatalf("LRANGE rows = %#v", rs.Rows)
 	}
 }
+
+func TestSplitCommandKeepsEmptyArgument(t *testing.T) {
+	got, err := splitCommand(`SET key ""`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0] != "SET" || got[1] != "key" || got[2] != "" {
+		t.Fatalf("args = %#v", got)
+	}
+}
+
+func TestConvertTruncated(t *testing.T) {
+	rs := convert("LRANGE", []any{"a", "b", "c"}, 2)
+	if !rs.Truncated {
+		t.Fatal("list result should be marked truncated")
+	}
+	rs = convert("HGETALL", []any{"a", "1", "b", "2", "c", "3"}, 2)
+	if !rs.Truncated || len(rs.Rows) != 2 {
+		t.Fatalf("hash result = %#v", rs)
+	}
+}
+
+func FuzzSplitCommand(f *testing.F) {
+	f.Add(`SET "my key" 'hello world'`)
+	f.Add(`GET ""`)
+	f.Fuzz(func(t *testing.T, input string) {
+		_, _ = splitCommand(input)
+	})
+}

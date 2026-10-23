@@ -60,6 +60,7 @@ const (
 	KeyErrorNoPrimaryKey       = "error.no_primary_key"
 	KeyErrorReadOnly           = "error.read_only"
 	KeyErrorMutation           = "error.mutation"
+	KeyErrorInvalidValue       = "error.invalid_value"
 	KeyErrorEdit               = "error.edit"
 	KeyErrorUnsupportedFeature = "error.unsupported_feature"
 	KeyStatusUpdated           = "status.updated"
@@ -76,16 +77,10 @@ const (
 	KeyHelpEditorKeys          = "help.editor.keys"
 	KeyHelpResultsKeys         = "help.results.keys"
 	KeyHelpClose               = "help.close"
-	KeyHelpCommands            = "help.commands"
-	KeyHelpCommandsTip         = "help.commands.tip"
-
-	KeyCommandTitle = "command.title"
-	KeyCommandHint  = "command.hint"
 
 	KeyCompletionTitle = "completion.title"
 	KeyCompletionHint  = "completion.hint"
 
-	KeyCmdConnect    = "cmd.connect"
 	KeyCmdDisconnect = "cmd.disconnect"
 	KeyCmdExport     = "cmd.export"
 	KeyCmdFocus      = "cmd.focus"
@@ -151,12 +146,8 @@ const (
 	KeyTerminalTooSmall = "status.terminal_too_small"
 	KeyNoConnections    = "sidebar.no_connections"
 
-	KeyObjectTable  = "object.table"
-	KeyObjectView   = "object.view"
-	KeyObjectColumn = "object.column"
-
 	KeyQuerySelectTable = "query.select_table"
 
-	KeyNoRows      = "results.no_rows"
-	KeyResultsNull = "results.null"
+	KeyNoRows          = "results.no_rows"
+	KeyResultsAffected = "results.affected"
 )

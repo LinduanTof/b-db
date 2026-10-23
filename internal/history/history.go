@@ -13,6 +13,7 @@ const DefaultLimit = 500
 
 type Store struct {
 	mu      sync.Mutex
+	saveMu  sync.Mutex
 	path    string
 	limit   int
 	entries []string
@@ -85,6 +86,9 @@ func (s *Store) Add(stmt string) bool {
 }
 
 func (s *Store) Save() error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	s.mu.Lock()
 	entries := make([]string, len(s.entries))
 	copy(entries, s.entries)

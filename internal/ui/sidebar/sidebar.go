@@ -37,18 +37,21 @@ type Node struct {
 }
 
 type SchemasLoadedMsg struct {
+	Epoch   uint64
 	Node    *Node
 	Schemas []string
 	Err     error
 }
 
 type TablesLoadedMsg struct {
+	Epoch   uint64
 	Node    *Node
 	Objects []db.Object
 	Err     error
 }
 
 type ColumnsLoadedMsg struct {
+	Epoch   uint64
 	Node    *Node
 	Columns []db.Column
 	Err     error
@@ -83,6 +86,7 @@ type Model struct {
 
 	conn     db.Conn
 	connName string
+	epoch    uint64
 
 	configPath string
 }
@@ -111,6 +115,8 @@ func (m *Model) SetConfigPath(path string) {
 }
 
 func (m *Model) SetConn(conn db.Conn) tea.Cmd {
+	m.epoch++
+	epoch := m.epoch
 	m.conn = conn
 	m.connName = conn.Name()
 	for _, root := range m.roots {
@@ -123,7 +129,7 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 			root.Expanded = true
 			root.Loading = true
 			m.rebuild()
-			return loadSchemas(conn, root)
+			return loadSchemas(conn, root, epoch)
 		}
 	}
 	m.rebuild()
@@ -154,6 +160,7 @@ func (m *Model) SelectedTable() (schema, table string, ok bool) {
 }
 
 func (m *Model) ClearConn() {
+	m.epoch++
 	m.conn = nil
 	m.connName = ""
 	for _, root := range m.roots {
@@ -169,6 +176,9 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return *m, m.handleKey(msg)
 	case SchemasLoadedMsg:
+		if msg.Epoch != m.epoch {
+			return *m, nil
+		}
 		msg.Node.Loading = false
 		if msg.Err == nil {
 			children := make([]*Node, 0, len(msg.Schemas))
@@ -186,6 +196,9 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.rebuild()
 		return *m, nil
 	case TablesLoadedMsg:
+		if msg.Epoch != m.epoch {
+			return *m, nil
+		}
 		msg.Node.Loading = false
 		if msg.Err == nil {
 			children := make([]*Node, 0, len(msg.Objects))
@@ -205,6 +218,9 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.rebuild()
 		return *m, nil
 	case ColumnsLoadedMsg:
+		if msg.Epoch != m.epoch {
+			return *m, nil
+		}
 		msg.Node.Loading = false
 		if msg.Err == nil {
 			children := make([]*Node, 0, len(msg.Columns))
@@ -327,15 +343,15 @@ func (m *Model) toggle(n *Node) tea.Cmd {
 	case KindConnection:
 		n.Loading = true
 		m.rebuild()
-		return loadSchemas(m.conn, n)
+		return loadSchemas(m.conn, n, m.epoch)
 	case KindSchema:
 		n.Loading = true
 		m.rebuild()
-		return loadTables(m.conn, n)
+		return loadTables(m.conn, n, m.epoch)
 	case KindTable:
 		n.Loading = true
 		m.rebuild()
-		return loadColumns(m.conn, n)
+		return loadColumns(m.conn, n, m.epoch)
 	}
 	return nil
 }
@@ -481,31 +497,31 @@ func pad(s string, width int) string {
 	return s
 }
 
-func loadSchemas(conn db.Conn, node *Node) tea.Cmd {
+func loadSchemas(conn db.Conn, node *Node, epoch uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		schemas, err := conn.Catalog().Schemas(ctx)
-		return SchemasLoadedMsg{Node: node, Schemas: schemas, Err: err}
+		return SchemasLoadedMsg{Epoch: epoch, Node: node, Schemas: schemas, Err: err}
 	}
 }
 
-func loadTables(conn db.Conn, node *Node) tea.Cmd {
+func loadTables(conn db.Conn, node *Node, epoch uint64) tea.Cmd {
 	schema := node.Schema
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		objects, err := conn.Catalog().Tables(ctx, schema)
-		return TablesLoadedMsg{Node: node, Objects: objects, Err: err}
+		return TablesLoadedMsg{Epoch: epoch, Node: node, Objects: objects, Err: err}
 	}
 }
 
-func loadColumns(conn db.Conn, node *Node) tea.Cmd {
+func loadColumns(conn db.Conn, node *Node, epoch uint64) tea.Cmd {
 	schema, table := node.Schema, node.Table
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		cols, err := conn.Catalog().Columns(ctx, schema, table)
-		return ColumnsLoadedMsg{Node: node, Columns: cols, Err: err}
+		return ColumnsLoadedMsg{Epoch: epoch, Node: node, Columns: cols, Err: err}
 	}
 }

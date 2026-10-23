@@ -251,3 +251,40 @@ func TestNoResultPromptAndExec(t *testing.T) {
 		t.Fatalf("error view = %q", got)
 	}
 }
+
+func TestCursorValuePreservesRawData(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 10)
+	m.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "note"}, {Name: "body"}},
+		Rows:    [][]any{{nil, "line1\nline2"}},
+	})
+
+	m.cursorCol = 0
+	if value, ok := m.CursorValue(); !ok || value != nil {
+		t.Fatalf("NULL value = %#v, ok = %v", value, ok)
+	}
+	m.cursorCol = 1
+	if value, ok := m.CursorValue(); !ok || value != "line1\nline2" {
+		t.Fatalf("multiline value = %#v, ok = %v", value, ok)
+	}
+}
+
+func TestOrderedResultFollowsSort(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 10)
+	m.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "name"}},
+		Rows:    [][]any{{"b"}, {"a"}},
+	})
+	m.cursorCol = 0
+	m.toggleSort()
+
+	rs := m.OrderedResult()
+	if rs == nil || len(rs.Rows) != 2 || rs.Rows[0][0] != "a" || rs.Rows[1][0] != "b" {
+		t.Fatalf("ordered rows = %#v", rs)
+	}
+	if m.Result().Rows[0][0] != "b" {
+		t.Fatal("original result should not be reordered")
+	}
+}
