@@ -413,6 +413,7 @@ func TestColumnCompletion(t *testing.T) {
 
 func TestAddConnectionFromUI(t *testing.T) {
 	m := testModel(t, "en")
+	m.editor.SetValue("SELECT 1;")
 	m = sendKey(t, m, tea.KeyPressMsg{Text: "a"})
 	if !m.connForm.IsOpen() {
 		t.Fatal("'a' should open the connection form")
@@ -434,12 +435,66 @@ func TestAddConnectionFromUI(t *testing.T) {
 	if !strings.Contains(m.sidebar.View(), "smoke") {
 		t.Fatalf("sidebar missing new connection:\n%s", m.sidebar.View())
 	}
+	if m.editor.Value() != "SELECT 1;" {
+		t.Fatalf("unsaved editor content should survive when no session is active, got %q", m.editor.Value())
+	}
 	conns, err := config.LoadRuntimeConnections()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(conns) != 1 || conns[0].Name != "smoke" || conns[0].Path != path {
 		t.Fatalf("saved connections = %+v", conns)
+	}
+}
+
+func TestAddConnectionSavesCurrentSession(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.shutdown()
+
+	m.editor.SetValue("SELECT 42;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.results.Result() == nil {
+		t.Fatal("editor query should produce results")
+	}
+
+	data, err := os.ReadFile(m.cfg.Connections[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "second.db")
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m = runCmd(t, m, m.addConnection(config.Connection{
+		Name: "second",
+		Type: config.TypeSQLite,
+		Path: secondPath,
+	}))
+	if m.connName != "second" || m.conn == nil {
+		t.Fatalf("connection = %q, status=%s", m.connName, m.status)
+	}
+	if m.editor.Value() != "" || m.results.Result() != nil {
+		t.Fatalf("new session should start clean: editor=%q results=%#v", m.editor.Value(), m.results.Result())
+	}
+
+	saved, ok := m.sessions["local-sqlite"]
+	if !ok {
+		t.Fatal("previous session was not saved")
+	}
+	if saved.tabs[saved.activeTab].editor.Value() != "SELECT 42;" || saved.results.Result() == nil {
+		t.Fatalf("saved session state = editor %q, results %#v", saved.tabs[saved.activeTab].editor.Value(), saved.results.Result())
+	}
+
+	m = runCmd(t, m, m.switchToConnection("local-sqlite"))
+	if m.connName != "local-sqlite" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+	if m.editor.Value() != "SELECT 42;" || m.results.Result() == nil {
+		t.Fatalf("restored session state = editor %q, results %#v", m.editor.Value(), m.results.Result())
 	}
 }
 

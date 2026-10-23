@@ -172,6 +172,13 @@ type Model struct {
 	editCache  map[string]editInfo
 	editTarget editTarget
 
+	tabs           []editorTab
+	activeTab      int
+	tabConnName    string
+	tabStates      map[string]savedTabs
+	tabSaveGen     uint64
+	tabSavePending bool
+
 	tableMenuSchema string
 	tableMenuTable  string
 	tableMenuKind   string
@@ -212,12 +219,13 @@ type Model struct {
 type session struct {
 	conn         db.Conn
 	connName     string
-	editor       editor.Model
 	results      results.Model
 	completer    *ac.Engine
 	tableSchemas map[string]string
 	editCache    map[string]editInfo
 	pager        *pagination
+	tabs         []editorTab
+	activeTab    int
 }
 
 func New(cfg *config.Config, t *i18n.Translator) *Model {
@@ -241,7 +249,11 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	}
 	m.sidebar = sidebar.New(cfg.Connections, t)
 	m.sidebar.SetConfigPath(cfg.Path)
-	m.editor = editor.New(t)
+	m.tabStates, _ = loadTabStates()
+	if m.tabStates == nil {
+		m.tabStates = map[string]savedTabs{}
+	}
+	m.resetTabs()
 	m.results = results.New(t)
 	m.options = menu.New(t)
 	m.tableMenu = menu.New(t)
@@ -370,7 +382,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editor.ReplaceBeforeCursor(msg.PrefixLen, msg.Text)
 		}
 		m.completion.Close()
-		return m, nil
+		return m, m.scheduleTabSave()
 	case connection.SubmittedMsg:
 		return m, m.addConnection(msg.Conn)
 	case connOpenedMsg:
@@ -379,6 +391,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleQueryDone(msg)
 	case tablePageDoneMsg:
 		return m, m.handleTablePageDone(msg)
+	case tabSaveMsg:
+		if msg.gen != m.tabSaveGen {
+			return m, nil
+		}
+		m.tabSavePending = false
+		_ = m.saveTabStatesNow()
+		return m, nil
 	case celledit.SubmittedMsg:
 		return m, m.openUpdateConfirm(msg.Value)
 	case confirm.ConfirmedMsg:
@@ -407,6 +426,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m.sidebar, cmd = m.sidebar.Update(msg)
+		return m, cmd
+	case tea.PasteMsg:
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.Update(msg)
+		if m.focus == focusEditor {
+			return m, tea.Batch(cmd, m.scheduleTabSave())
+		}
 		return m, cmd
 	}
 
@@ -644,6 +670,22 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.sidebar, cmd = m.sidebar.Update(msg)
 		return cmd
 	case focusEditor:
+		switch key {
+		case "ctrl+t":
+			return m.newTab()
+		case "ctrl+w":
+			return m.closeTab()
+		case "ctrl+tab":
+			return m.switchTab(1)
+		case "ctrl+shift+tab":
+			return m.switchTab(-1)
+		}
+		if (key == "alt+left" || key == "alt+right") && len(m.tabs) > 1 {
+			if key == "alt+left" {
+				return m.switchTab(-1)
+			}
+			return m.switchTab(1)
+		}
 		if key == "ctrl+space" {
 			return m.refreshCompletion(true)
 		}
@@ -660,21 +702,26 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.runQuery()
 		case "ctrl+p":
 			m.editor.BrowseHistory(true)
-			return nil
+			return m.scheduleTabSave()
 		case "ctrl+n":
 			m.editor.BrowseHistory(false)
-			return nil
+			return m.scheduleTabSave()
 		}
 		var cmd tea.Cmd
+		before := m.editor.Value()
 		m.editor, cmd = m.editor.Update(msg)
+		var save tea.Cmd
+		if m.editor.Value() != before {
+			save = m.scheduleTabSave()
+		}
 		if key == "backspace" || msg.Text != "" {
 			if refresh := m.refreshCompletion(false); refresh != nil {
-				return tea.Batch(cmd, refresh)
+				return tea.Batch(cmd, refresh, save)
 			}
 		} else if m.completion.IsOpen() {
 			m.completion.Close()
 		}
-		return cmd
+		return tea.Batch(cmd, save)
 	case focusResults:
 		switch key {
 		case "n":
@@ -787,6 +834,8 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	}
 	m.conn = msg.conn
 	m.connName = msg.name
+	m.tabConnName = msg.name
+	m.restoreTabsFor(msg.name)
 	m.executor = query.Executor{
 		Conn:        m.conn,
 		MaxRows:     m.cfg.Query.MaxRows,
@@ -800,7 +849,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	m.tableSchemas = map[string]string{}
 	m.completion.Close()
 
-	cmds := []tea.Cmd{m.sidebar.SetConn(m.conn), m.loadCompletionTablesCmd()}
+	cmds := []tea.Cmd{m.sidebar.SetConn(m.conn), m.loadCompletionTablesCmd(), m.scheduleTabSave()}
 	if m.pendingScript != "" {
 		path := m.pendingScript
 		m.pendingScript = ""
@@ -976,18 +1025,18 @@ func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
 		m.editor.SetValue(redisCommand(msg.Kind, msg.Table))
 		m.focus = focusEditor
 		m.layout()
-		return m.editor.Focus()
+		return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
 	}
 	if m.conn != nil && m.conn.Type() == "mongo" {
 		m.editor.SetValue(mongoCommand(msg.Schema, msg.Table))
 		m.focus = focusEditor
 		m.layout()
-		return m.editor.Focus()
+		return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
 	}
 	m.editor.SetValue(m.selectTableStmt(msg.Schema, msg.Table))
 	m.focus = focusEditor
 	m.layout()
-	return m.editor.Focus()
+	return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
 }
 
 func mongoCommand(schema, table string) string {
@@ -1270,6 +1319,7 @@ func (m *Model) disconnect() {
 		m.conn = nil
 	}
 	if m.connName != "" {
+		m.rememberCurrentTabs()
 		delete(m.sessions, m.connName)
 	}
 	m.connName = ""
@@ -1279,6 +1329,7 @@ func (m *Model) disconnect() {
 	m.pager = nil
 	m.sidebar.ClearConn()
 	m.results.Clear()
+	_ = m.saveTabStatesNow()
 	m.setStatus(m.t.T(i18n.KeyStatusDisconnected), false)
 }
 
@@ -1308,27 +1359,44 @@ func (m *Model) saveCurrentSession() {
 	m.cancelMutation()
 	m.running = false
 	m.querySeq++
+	m.syncActiveTab()
+	tabs := append([]editorTab(nil), m.tabs...)
 	m.sessions[m.connName] = &session{
 		conn:         m.conn,
 		connName:     m.connName,
-		editor:       m.editor,
 		results:      m.results,
 		completer:    m.completer,
 		tableSchemas: m.tableSchemas,
 		editCache:    m.editCache,
 		pager:        m.pager,
+		tabs:         tabs,
+		activeTab:    m.activeTab,
 	}
+	_ = m.saveTabStatesNow()
 }
 
 func (m *Model) activateSession(name string, saved *session) {
 	m.conn = saved.conn
 	m.connName = name
-	m.editor = saved.editor
+	m.tabConnName = name
 	m.results = saved.results
 	m.completer = saved.completer
 	m.tableSchemas = saved.tableSchemas
 	m.editCache = saved.editCache
 	m.pager = saved.pager
+	if len(saved.tabs) > 0 {
+		m.tabs = append([]editorTab(nil), saved.tabs...)
+		m.activeTab = saved.activeTab
+		if m.activeTab < 0 || m.activeTab >= len(m.tabs) {
+			m.activeTab = 0
+		}
+		m.editor = m.tabs[m.activeTab].editor
+		if m.history != nil {
+			m.editor.SetHistory(m.history.Entries())
+		}
+	} else {
+		m.resetTabs()
+	}
 	m.executor = query.Executor{
 		Conn:        saved.conn,
 		MaxRows:     m.cfg.Query.MaxRows,
@@ -1348,15 +1416,13 @@ func (m *Model) resetSession() {
 	m.connName = ""
 	m.running = false
 	m.pendingCmd = nil
-	m.editor = editor.New(m.t)
+	m.tabConnName = ""
+	m.resetTabs()
 	m.results = results.New(m.t)
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
 	m.editCache = map[string]editInfo{}
 	m.pager = nil
-	if m.history != nil {
-		m.editor.SetHistory(m.history.Entries())
-	}
 	m.closeOverlays()
 	m.sidebar.ClearConn()
 	m.layout()
@@ -1669,6 +1735,7 @@ func (m *Model) loadCompletionTablesCmd() tea.Cmd {
 
 func (m *Model) shutdown() {
 	m.connectSeq++
+	_ = m.saveTabStatesNow()
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -1710,6 +1777,9 @@ func (m *Model) addConnection(conn config.Connection) tea.Cmd {
 	m.cfg.Connections = append(m.cfg.Connections, resolved)
 	m.sidebar.AddConnection(resolved)
 	m.setStatus(m.t.T(i18n.KeyStatusConnectionAdded, resolved.Name), false)
+	if m.conn != nil {
+		return m.switchToConnection(resolved.Name)
+	}
 	return m.connectCmd(resolved.Name)
 }
 

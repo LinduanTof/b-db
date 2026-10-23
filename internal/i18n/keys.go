@@ -26,6 +26,8 @@ const (
 	KeyStatusNoMoreRows    = "status.no_more_rows"
 	KeyStatusFirstPage     = "status.first_page"
 	KeyStatusNoPagination  = "status.no_pagination"
+	KeyStatusLastTab       = "status.last_tab"
+	KeyTabUntitled         = "tab.untitled"
 
 	KeyHintSidebar        = "hint.sidebar"
 	KeyHintEditor         = "hint.editor"

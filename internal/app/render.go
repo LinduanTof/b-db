@@ -28,7 +28,7 @@ func (m *Model) layout() {
 			m.editorH, m.resultsH = 0, 0
 		}
 		m.sidebar.SetSize(max(1, m.sideW), mainH)
-		m.editor.SetSize(max(1, m.rightW), max(1, m.editorH-1))
+		m.editor.SetSize(max(1, m.rightW), max(1, m.editorH-2))
 		m.results.SetSize(max(1, m.rightW), max(1, m.resultsH-1))
 		return
 	}
@@ -68,7 +68,7 @@ func (m *Model) layout() {
 
 	m.sideW, m.rightW, m.editorH, m.resultsH = sideW, rightW, editorH, resultsH
 	m.sidebar.SetSize(sideW, mainH)
-	m.editor.SetSize(rightW, editorH-1)
+	m.editor.SetSize(rightW, max(1, editorH-2))
 	m.results.SetSize(rightW, resultsH-1)
 }
 
@@ -117,7 +117,7 @@ func (m *Model) renderMain() string {
 	if m.effectiveZoom() {
 		switch m.focus {
 		case focusEditor:
-			body = renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.editor.View(), m.width, mainH)
+			body = renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.width)+"\n"+m.editor.View(), m.width, mainH)
 		case focusResults:
 			body = renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.width, mainH)
 		default:
@@ -125,7 +125,7 @@ func (m *Model) renderMain() string {
 		}
 	} else {
 		side := renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.sideW, mainH)
-		editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.editor.View(), m.rightW, m.editorH)
+		editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
 		resultsView := renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.rightW, m.resultsH)
 		right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
 		separator := strings.Repeat("│\n", mainH-1) + "│"

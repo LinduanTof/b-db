@@ -266,7 +266,7 @@ func (m *Model) insertTemplate(schema, table string, columns []db.Column) tea.Cm
 	m.editor.SetValue(stmt)
 	m.focus = focusEditor
 	m.layout()
-	return m.editor.Focus()
+	return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
 }
 
 func parseCellValue(raw, dataType string) (any, error) {

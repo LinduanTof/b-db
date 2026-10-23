@@ -86,9 +86,11 @@ var en = map[string]string{
 	KeyStatusNoMoreRows:    "No more rows",
 	KeyStatusFirstPage:     "Already on the first page",
 	KeyStatusNoPagination:  "Current result is not a table page",
+	KeyStatusLastTab:       "Cannot close the last tab",
+	KeyTabUntitled:         "Query %d",
 
 	KeyHintSidebar:        "enter: menu  s: select  d: structure  a: add",
-	KeyHintEditor:         "ctrl+enter/f5: run  ctrl+space: complete  esc: cancel",
+	KeyHintEditor:         "ctrl+enter/f5: run  ctrl+space: complete  ctrl+t: tab  esc: cancel",
 	KeyHintResults:        "enter/v: cell  e: edit  x: del  n/p: page  H/L: scroll",
 	KeyMenuBarHint:        "Esc menu   F2 layout   q quit   ? help",
 	KeyMenuTitle:          "Options",
@@ -139,7 +141,7 @@ var en = map[string]string{
 	KeyHelpResults:     "Results",
 	KeyHelpGlobalKeys:  "esc: options menu   f2: focused layout   q: quit   ?: help   tab/shift+tab: panes   ctrl+c: quit",
 	KeyHelpSidebarKeys: "↑/↓: move   enter: table actions   s: select table   d: structure   a: add source   r: reload",
-	KeyHelpEditorKeys:  "ctrl+enter or f5: execute   ctrl+space: complete   ctrl+p: previous query   ctrl+n: next query   esc: cancel",
+	KeyHelpEditorKeys:  "ctrl+enter or f5: execute   ctrl+space: complete   ctrl+t: new tab   ctrl+w: close tab   ctrl+tab / alt+left,right: switch tab   ctrl+p: previous query   ctrl+n: next query   esc: cancel",
 	KeyHelpResultsKeys: "arrows/hjkl: move cell   n/p: next/previous page   H/L: scroll columns   enter/v: view full cell   e: edit cell   x: delete row   [/]: width   o: sort   c: copy   ctrl+e/j/m: export",
 	KeyHelpClose:       "press ? or esc to close",
 
@@ -243,9 +245,11 @@ var zh = map[string]string{
 	KeyStatusNoMoreRows:    "没有更多数据",
 	KeyStatusFirstPage:     "已经是第一页",
 	KeyStatusNoPagination:  "当前结果不是表数据分页",
+	KeyStatusLastTab:       "最后一个标签不能关闭",
+	KeyTabUntitled:         "查询 %d",
 
 	KeyHintSidebar:        "enter: 菜单  s: 选中  d: 结构  a: 添加",
-	KeyHintEditor:         "ctrl+enter/f5: 执行  ctrl+space: 补全  esc: 取消",
+	KeyHintEditor:         "ctrl+enter/f5: 执行  ctrl+space: 补全  ctrl+t: 标签  esc: 取消",
 	KeyHintResults:        "enter/v: 查看  e: 编辑  x: 删除  n/p: 翻页  H/L: 横滚",
 	KeyMenuBarHint:        "Esc 菜单   F2 布局   q 退出   ? 帮助",
 	KeyMenuTitle:          "选项",
@@ -296,7 +300,7 @@ var zh = map[string]string{
 	KeyHelpResults:     "结果",
 	KeyHelpGlobalKeys:  "esc: 选项菜单   f2: 专注布局   q: 退出   ?: 帮助   tab/shift+tab: 面板   ctrl+c: 退出",
 	KeyHelpSidebarKeys: "↑/↓: 移动   enter: 表操作   s: 选中表   d: 表结构   a: 添加数据源   r: 重载",
-	KeyHelpEditorKeys:  "ctrl+enter 或 f5: 执行   ctrl+space: 补全   ctrl+p: 上一条   ctrl+n: 下一条   esc: 取消",
+	KeyHelpEditorKeys:  "ctrl+enter 或 f5: 执行   ctrl+space: 补全   ctrl+t: 新建标签   ctrl+w: 关闭标签   ctrl+tab / alt+左右: 切换标签   ctrl+p: 上一条   ctrl+n: 下一条   esc: 取消",
 	KeyHelpResultsKeys: "方向键/hjkl: 移动单元格   n/p: 下一页/上一页   H/L: 横向滚动   enter/v: 查看完整内容   e: 编辑单元格   x: 删除行   [/]: 列宽   o: 排序   c: 复制   ctrl+e/j/m: 导出",
 	KeyHelpClose:       "按 ? 或 esc 关闭",
 
