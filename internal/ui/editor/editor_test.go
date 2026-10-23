@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/i18n"
 )
 
 func TestTokenize(t *testing.T) {

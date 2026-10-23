@@ -1,4 +1,4 @@
-module github.com/linduan-guan/b-db
+module github.com/LinduanTof/b-db
 
 go 1.26.4
 

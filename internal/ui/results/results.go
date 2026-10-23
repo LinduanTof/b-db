@@ -10,10 +10,10 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/linduan-guan/b-db/internal/db"
-	"github.com/linduan-guan/b-db/internal/i18n"
-	"github.com/linduan-guan/b-db/internal/ui/textutil"
-	"github.com/linduan-guan/b-db/internal/ui/theme"
+	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/ui/textutil"
+	"github.com/LinduanTof/b-db/internal/ui/theme"
 )
 
 const (

@@ -17,7 +17,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
-	"github.com/linduan-guan/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/db"
 )
 
 func init() {

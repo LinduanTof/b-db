@@ -9,7 +9,7 @@
 要求 Go 1.26+。
 
 ```bash
-go install github.com/linduan-guan/b-db/cmd/bdb@latest
+go install github.com/LinduanTof/b-db/cmd/bdb@latest
 # 或本地构建
 make demo-db     # 生成 SQLite 示例库 testdata/demo.db
 make build

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/linduan-guan/b-db/internal/db"
-	"github.com/linduan-guan/b-db/internal/db/dialect"
+	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/db/dialect"
 )
 
 func TestMutatorSQLite(t *testing.T) {

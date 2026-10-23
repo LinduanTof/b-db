@@ -3,7 +3,7 @@ package results
 import (
 	"testing"
 
-	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/i18n"
 )
 
 func BenchmarkView1000Rows(b *testing.B) {
