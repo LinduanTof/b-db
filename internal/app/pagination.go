@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -30,6 +31,8 @@ type pagination struct {
 	atEnd      bool
 	refresh    bool
 	metaLoaded bool
+	total      int64
+	totalKnown bool
 }
 
 func (m *Model) runPageQuery(pager *pagination) tea.Cmd {
@@ -73,12 +76,46 @@ func (m *Model) runPageQuery(pager *pagination) tea.Cmd {
 				page.metaLoaded = true
 			}
 		}
+		if !page.totalKnown {
+			if total, err := tableCount(ctx, conn, typ, schema, table); err == nil {
+				page.total = total
+				page.totalKnown = true
+			}
+		}
 		page.primary = primary
 		page.orderBy = pageOrderTerms(sortColumn, sortAsc, primary)
 		page.stmt = buildPageStmt(typ, schema, table, offset, size, page.orderBy)
 		out := executor.Run(ctx, page.stmt)
 		cancel()
 		return tablePageDoneMsg{id: id, outcome: out, page: &page}
+	}
+}
+
+func buildCountStmt(typ, schema, table string) string {
+	return "SELECT COUNT(*) FROM " + dialectFor(typ).Qualified(schema, table) + ";"
+}
+
+func tableCount(ctx context.Context, conn db.Conn, typ, schema, table string) (int64, error) {
+	result, err := conn.Querier().Query(ctx, buildCountStmt(typ, schema, table), 1)
+	if err != nil {
+		return 0, err
+	}
+	if result == nil || len(result.Rows) == 0 || len(result.Rows[0]) == 0 {
+		return 0, fmt.Errorf("count query returned no rows")
+	}
+	switch value := result.Rows[0][0].(type) {
+	case int64:
+		return value, nil
+	case int:
+		return int64(value), nil
+	case int32:
+		return int64(value), nil
+	case []byte:
+		return strconv.ParseInt(string(value), 10, 64)
+	case string:
+		return strconv.ParseInt(value, 10, 64)
+	default:
+		return strconv.ParseInt(fmt.Sprint(value), 10, 64)
 	}
 }
 

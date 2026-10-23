@@ -219,7 +219,9 @@ var en = map[string]string{
 
 	KeyNoRows:          "No rows",
 	KeyResultsAffected: "%d row(s) affected in %s",
-	KeyResultsSQL:      "SQL",
+	KeyResultsSQL:      "SQL:",
+	KeyResultsCount:    "count %d",
+	KeyResultsPageInfo: "Page %d · %d row(s) · time %s",
 }
 
 var zh = map[string]string{
@@ -381,5 +383,7 @@ var zh = map[string]string{
 
 	KeyNoRows:          "没有数据",
 	KeyResultsAffected: "影响 %d 行，耗时 %s",
-	KeyResultsSQL:      "SQL",
+	KeyResultsSQL:      "SQL:",
+	KeyResultsCount:    "总数 %d",
+	KeyResultsPageInfo: "第 %d 页 · %d 行 · 耗时 %s",
 }

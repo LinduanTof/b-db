@@ -1032,6 +1032,11 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 	m.pager = page
 	size := max(1, page.size)
 	pageNumber := page.offset/size + 1
+	info := m.t.T(i18n.KeyResultsPageInfo, pageNumber, len(out.Result.Rows), humanDuration(out.Result.Elapsed))
+	if page.totalKnown {
+		info = m.t.T(i18n.KeyResultsCount, page.total) + " · " + info
+	}
+	m.results.SetPage(page.stmt, info)
 	m.setStatus(m.t.T(i18n.KeyStatusPage, pageNumber, len(out.Result.Rows), humanDuration(out.Result.Elapsed)), false)
 	return nil
 }

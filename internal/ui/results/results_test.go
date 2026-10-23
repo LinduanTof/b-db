@@ -55,6 +55,54 @@ func TestViewDimensionsAndCJK(t *testing.T) {
 	}
 }
 
+func TestPageFooter(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(120, 12)
+	m.SetResult(sample(5))
+	m.SetPage(`SELECT * FROM "users" ORDER BY "id" LIMIT 100 OFFSET 0;`, "count 5 · Page 1 · 5 row(s) · time 12ms")
+
+	if got := m.bodyRows(); got != 7 {
+		t.Fatalf("bodyRows = %d, want 7 with one footer line", got)
+	}
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 12 {
+		t.Fatalf("lines = %d, want 12", len(lines))
+	}
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != 120 {
+			t.Fatalf("line %d width = %d, want 120: %q", i, w, line)
+		}
+	}
+	footer := ansi.Strip(lines[len(lines)-1])
+	if !strings.Contains(footer, "SQL:") || !strings.Contains(footer, "OFFSET 0") ||
+		!strings.Contains(footer, "count 5") || !strings.Contains(footer, "Page 1") {
+		t.Fatalf("footer = %q\n%s", footer, view)
+	}
+
+	m.SetResult(sample(1))
+	if strings.Contains(m.View(), "OFFSET 0") {
+		t.Fatal("new result should clear the page footer")
+	}
+	if got := m.bodyRows(); got != 8 {
+		t.Fatalf("bodyRows = %d, want 8 without footer", got)
+	}
+}
+
+func TestPageFooterKeepsMetaWhenNarrow(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(40, 10)
+	m.SetResult(sample(2))
+	m.SetPage(`SELECT * FROM "a_very_long_table_name" ORDER BY "id" LIMIT 100 OFFSET 0;`, "count 100 · Page 3 · 2 row(s) · time 12ms")
+	footer := ansi.Strip(strings.Split(m.View(), "\n")[m.height-1])
+	if !strings.Contains(footer, "SQL:") || !strings.Contains(footer, "count 100") || !strings.Contains(footer, "Page 3") {
+		t.Fatalf("footer = %q", footer)
+	}
+	if ansi.StringWidth(footer) != 40 {
+		t.Fatalf("footer width = %d, want 40", ansi.StringWidth(footer))
+	}
+}
+
 func TestSortIndicator(t *testing.T) {
 	m := New(i18n.New("en"))
 	m.SetSize(60, 10)

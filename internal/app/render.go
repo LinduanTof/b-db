@@ -134,7 +134,6 @@ func (m *Model) renderMain() string {
 
 	m.statusbar.Width = m.width
 	m.statusbar.Left = m.statusLeft()
-	m.statusbar.Center = m.previewSQL()
 	m.statusbar.Right = m.status
 	m.statusbar.IsError = m.statusErr
 	menu := theme.MenuBar.Render(textutil.FitLine(" "+m.t.T(i18n.KeyMenuBarHint), m.width))
@@ -185,13 +184,6 @@ func (m *Model) statusLeft() string {
 		parts = append(parts, "● "+m.connName)
 	}
 	return strings.Join(parts, "  ")
-}
-
-func (m *Model) previewSQL() string {
-	if m.pager == nil || m.pager.stmt == "" {
-		return ""
-	}
-	return m.t.T(i18n.KeyResultsSQL) + " " + m.pager.stmt
 }
 
 func renderPane(title, hint, body string, width, height int) string {

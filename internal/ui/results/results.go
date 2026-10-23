@@ -39,6 +39,8 @@ type Model struct {
 
 	sourceSchema string
 	sourceTable  string
+	querySQL     string
+	pageInfo     string
 
 	order   []int
 	sortCol int
@@ -56,6 +58,7 @@ func (m *Model) SetSize(width, height int) {
 func (m *Model) SetResult(rs *db.ResultSet) {
 	m.rs = rs
 	m.sourceSchema, m.sourceTable = "", ""
+	m.querySQL, m.pageInfo = "", ""
 	m.errText = ""
 	m.affected = nil
 	m.elapsed = rs.Elapsed
@@ -84,6 +87,7 @@ func (m *Model) SetExec(affected int64, elapsed time.Duration) {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
+	m.querySQL, m.pageInfo = "", ""
 	m.errText = ""
 	m.affected = &affected
 	m.elapsed = elapsed
@@ -93,8 +97,14 @@ func (m *Model) SetError(text string) {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
+	m.querySQL, m.pageInfo = "", ""
 	m.affected = nil
 	m.errText = text
+}
+
+func (m *Model) SetPage(sql, info string) {
+	m.querySQL = sql
+	m.pageInfo = info
 }
 
 func (m *Model) Result() *db.ResultSet { return m.rs }
@@ -120,6 +130,7 @@ func (m *Model) Clear() {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
+	m.querySQL, m.pageInfo = "", ""
 	m.affected = nil
 	m.errText = ""
 	m.cursorRow, m.cursorCol = 0, 0
@@ -503,7 +514,60 @@ func (m *Model) ensureVisible() {
 }
 
 func (m *Model) bodyRows() int {
-	return max(0, m.height-4)
+	return max(0, m.height-4-m.footerHeight())
+}
+
+func (m *Model) footerHeight() int {
+	if m.querySQL != "" || m.pageInfo != "" {
+		return 1
+	}
+	return 0
+}
+
+func (m *Model) footerLines() []string {
+	line := m.footerLine()
+	if line == "" {
+		return nil
+	}
+	return []string{line}
+}
+
+func (m *Model) footerLine() string {
+	if m.querySQL == "" && m.pageInfo == "" {
+		return ""
+	}
+	sqlPart := ""
+	if m.querySQL != "" {
+		sqlPart = m.t.T(i18n.KeyResultsSQL) + " " + m.querySQL
+	}
+	meta := m.pageInfo
+	if sqlPart == "" {
+		return theme.Footer.Render(textutil.FitLine(" "+footerTruncate(meta, max(0, m.width-1)), m.width))
+	}
+	if meta == "" {
+		return theme.Footer.Render(textutil.FitLine(" "+footerTruncate(sqlPart, max(0, m.width-1)), m.width))
+	}
+	if metaWidth := textutil.Width(meta); metaWidth > (m.width-2)/2 {
+		meta = footerTruncate(meta, max(0, (m.width-2)/2))
+	}
+	available := m.width - textutil.Width(meta) - 2
+	sqlPart = footerTruncate(sqlPart, max(0, available))
+	gap := max(1, m.width-1-textutil.Width(sqlPart)-textutil.Width(meta))
+	line := " " + sqlPart + strings.Repeat(" ", gap) + meta
+	return theme.Footer.Render(textutil.FitLine(line, m.width))
+}
+
+func footerTruncate(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if textutil.Width(text) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+	return textutil.Truncate(text, width-1) + "…"
 }
 
 type column struct {
@@ -560,8 +624,14 @@ func (m *Model) View() string {
 	if m.rs == nil {
 		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyResultsPrompt)), m.width, m.height)
 	}
-	if m.height < 4 {
-		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoRows)), m.width, m.height)
+	footer := m.footerLines()
+	gridHeight := m.height - len(footer)
+	if gridHeight < 4 {
+		content := theme.Muted.Render(m.t.T(i18n.KeyNoRows))
+		if len(footer) > 0 {
+			content += "\n" + strings.Join(footer, "\n")
+		}
+		return textutil.FitLines(content, m.width, m.height)
 	}
 
 	m.ensureVisible()
@@ -576,14 +646,15 @@ func (m *Model) View() string {
 			lines = append(lines, m.messageRow(m.t.T(i18n.KeyNoRows)))
 		}
 	} else {
-		for r := m.scrollRow; r < len(m.cells) && len(lines) < m.height-1; r++ {
+		for r := m.scrollRow; r < len(m.cells) && len(lines) < gridHeight-1; r++ {
 			lines = append(lines, m.renderRow(layout, r, r == m.cursorRow))
 		}
 	}
-	for len(lines) < m.height-1 {
+	for len(lines) < gridHeight-1 {
 		lines = append(lines, m.emptyRow(layout))
 	}
 	lines = append(lines, m.borderLine(layout, borderBottom))
+	lines = append(lines, footer...)
 	return strings.Join(lines, "\n")
 }
 

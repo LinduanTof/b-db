@@ -159,4 +159,6 @@ const (
 	KeyNoRows          = "results.no_rows"
 	KeyResultsAffected = "results.affected"
 	KeyResultsSQL      = "results.sql"
+	KeyResultsCount    = "results.count"
+	KeyResultsPageInfo = "results.page_info"
 )

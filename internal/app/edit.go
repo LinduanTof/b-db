@@ -246,6 +246,7 @@ func (m *Model) refreshSource() tea.Cmd {
 	if m.pager != nil && m.pager.schema == schema && m.pager.table == table {
 		page := *m.pager
 		page.refresh = true
+		page.totalKnown = false
 		return m.runPageQuery(&page)
 	}
 	return m.runPageQuery(&pagination{
