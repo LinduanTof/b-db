@@ -10,7 +10,7 @@ ui:
 
 query:
   timeout: 30s
-  max_rows: 1000
+  max_rows: 1000   # table browsing page size; editor queries are unlimited
 
 connections:
   - name: local-sqlite
@@ -37,10 +37,22 @@ connections:
   #   password: ${MYSQL_PASSWORD}
   #   database: bdb
 
-  # Redis / MongoDB (implemented in P3)
+  # Redis / MongoDB
   # - name: cache
   #   type: redis
   #   addr: 127.0.0.1:6379
+  #   password: ${REDIS_PASSWORD}
+  #   db: 0
   # - name: docs
   #   type: mongo
   #   uri: mongodb://127.0.0.1:27017
+
+  # Read-only connection: editing is disabled for this connection.
+  # - name: prod
+  #   type: postgres
+  #   host: db.example.com
+  #   port: 5432
+  #   user: readonly
+  #   password: ${PROD_PASSWORD}
+  #   database: app
+  #   read_only: true

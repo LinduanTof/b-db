@@ -7,8 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/linduan-guan/b-db/internal/config"
-	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/config"
+	"github.com/LinduanTof/b-db/internal/i18n"
 )
 
 func newOpen() Model {
@@ -53,6 +53,29 @@ func TestCycleType(t *testing.T) {
 	view := m.View()
 	if strings.Contains(view, "Host") || !strings.Contains(view, "Path") {
 		t.Fatalf("sqlite view:\n%s", view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.connType != config.TypeRedis {
+		t.Fatalf("type = %q", m.connType)
+	}
+	if len(m.visibleFields()) != 5 {
+		t.Fatalf("redis visible fields = %d, want 5", len(m.visibleFields()))
+	}
+	view = m.View()
+	if !strings.Contains(view, "Addr") || !strings.Contains(view, "DB") || strings.Contains(view, "Host") {
+		t.Fatalf("redis view:\n%s", view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.connType != config.TypeMongo {
+		t.Fatalf("type = %q", m.connType)
+	}
+	if len(m.visibleFields()) != 3 {
+		t.Fatalf("mongo visible fields = %d, want 3", len(m.visibleFields()))
+	}
+	if !strings.Contains(m.View(), "URI") {
+		t.Fatalf("mongo view:\n%s", m.View())
 	}
 }
 
@@ -174,6 +197,58 @@ func TestValidation(t *testing.T) {
 	m.setValue(fieldPort, "abc")
 	if _, err := m.build(); err == nil {
 		t.Fatal("expected invalid port error")
+	}
+}
+
+func TestSubmitRedis(t *testing.T) {
+	m := newOpen()
+	for i := 0; i < 3; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	}
+	if m.connType != config.TypeRedis {
+		t.Fatalf("type = %q", m.connType)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "cache"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "secret"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "2"})
+
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = model
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+	msg := cmd().(SubmittedMsg)
+	if msg.Conn.Type != config.TypeRedis || msg.Conn.Addr != "127.0.0.1:6379" ||
+		msg.Conn.Password != "secret" || msg.Conn.DB != 2 {
+		t.Fatalf("connection = %+v", msg.Conn)
+	}
+}
+
+func TestSubmitMongo(t *testing.T) {
+	m := newOpen()
+	for i := 0; i < 4; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	}
+	if m.connType != config.TypeMongo {
+		t.Fatalf("type = %q", m.connType)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "docs"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = model
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+	msg := cmd().(SubmittedMsg)
+	if msg.Conn.Type != config.TypeMongo || msg.Conn.URI != "mongodb://127.0.0.1:27017" {
+		t.Fatalf("connection = %+v", msg.Conn)
 	}
 }
 

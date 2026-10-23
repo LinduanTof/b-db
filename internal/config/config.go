@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -53,6 +54,8 @@ type Config struct {
 	UI                UIConfig     `yaml:"ui"`
 	Query             QueryConfig  `yaml:"query"`
 	Connections       []Connection `yaml:"connections"`
+
+	Path string `yaml:"-"`
 }
 
 type UIConfig struct {
@@ -79,6 +82,7 @@ type Connection struct {
 	Addr     string `yaml:"addr"`
 	DB       int    `yaml:"db"`
 	URI      string `yaml:"uri"`
+	ReadOnly bool   `yaml:"read_only"`
 }
 
 func Defaults() Config {
@@ -99,11 +103,77 @@ func DefaultPath() string {
 	return filepath.Join(home, ".config", "bdb", "config.yaml")
 }
 
+const defaultConfigTemplate = `# bdb configuration
+# Add connections here, or press "a" inside bdb to add one.
+
+default_connection: ""
+
+ui:
+  language: auto
+  theme: default
+  focus_mode: manual
+
+query:
+  timeout: 30s
+  max_rows: 1000   # table browsing page size; editor queries are unlimited
+
+connections: []
+
+# Examples:
+# - name: local-sqlite
+#   type: sqlite
+#   path: ./data.db
+# - name: local-pg
+#   type: postgres
+#   host: 127.0.0.1
+#   port: 5432
+#   user: postgres
+#   password: ${PG_PASSWORD}
+#   database: postgres
+#   sslmode: disable
+# - name: cache
+#   type: redis
+#   addr: 127.0.0.1:6379
+# - name: docs
+#   type: mongo
+#   uri: mongodb://127.0.0.1:27017
+`
+
+func ResolvePath(path string) string {
+	if path != "" {
+		return path
+	}
+	return DefaultPath()
+}
+
+func EnsureFile(path string) (bool, error) {
+	path = ResolvePath(path)
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer file.Close()
+	if _, err := file.WriteString(defaultConfigTemplate); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func Load(path string) (*Config, []string, error) {
 	cfg := Defaults()
-	if path == "" {
-		path = DefaultPath()
-	}
+	path = ResolvePath(path)
+	cfg.Path = path
 
 	var warnings []string
 	data, err := os.ReadFile(path)
@@ -113,8 +183,12 @@ func Load(path string) (*Config, []string, error) {
 	case err != nil:
 		return nil, nil, fmt.Errorf("read config %s: %w", path, err)
 	default:
-		if err := yaml.Unmarshal(data, &cfg); err != nil {
-			return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
+		if len(bytes.TrimSpace(data)) > 0 {
+			dec := yaml.NewDecoder(bytes.NewReader(data))
+			dec.KnownFields(true)
+			if err := dec.Decode(&cfg); err != nil {
+				return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
+			}
 		}
 		if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
 			warnings = append(warnings, fmt.Sprintf("config file %s is readable by other users (mode %04o); consider chmod 600", path, info.Mode().Perm()))
@@ -208,6 +282,16 @@ func (c *Config) expandEnv() error {
 	return nil
 }
 
+// ExpandConnection returns a copy of conn with ${VAR} references resolved.
+// The original value is left untouched so it can still be persisted without
+// writing secrets to disk.
+func ExpandConnection(conn Connection) (Connection, error) {
+	if err := conn.expandEnv(); err != nil {
+		return Connection{}, err
+	}
+	return conn, nil
+}
+
 func (c Connection) validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name is required")
@@ -280,6 +364,10 @@ func (c Connection) EffectivePort() int {
 		return 5432
 	case TypeMySQL:
 		return 3306
+	case TypeMongo:
+		return 27017
+	case TypeRedis:
+		return 6379
 	}
 	return 0
 }

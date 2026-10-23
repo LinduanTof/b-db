@@ -29,12 +29,12 @@ services:
       timeout: 3s
       retries: 30
 
-  # Enabled in P3
-  # redis:
-  #   image: redis:7
-  #   ports:
-  #     - "6379:6379"
-  # mongo:
-  #   image: mongo:7
-  #   ports:
-  #     - "27017:27017"
+  redis:
+    image: redis:7
+    ports:
+      - "${BDB_REDIS_PORT:-6379}:6379"
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "${BDB_MONGO_PORT:-27017}:27017"

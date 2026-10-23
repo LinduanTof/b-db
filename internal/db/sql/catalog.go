@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/linduan-guan/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/db"
 )
 
 type catalog struct{ c *conn }
@@ -87,6 +87,37 @@ func (k catalog) DDL(ctx context.Context, schema, table string) (string, error) 
 	default:
 		return "", fmt.Errorf("DDL not implemented for %s", k.c.typ)
 	}
+}
+
+func (k catalog) Databases(ctx context.Context) ([]string, error) {
+	switch k.c.typ {
+	case "postgres":
+		return k.pgDatabases(ctx)
+	default:
+		return nil, nil
+	}
+}
+
+func (k catalog) pgDatabases(ctx context.Context) ([]string, error) {
+	rows, err := k.c.db.QueryContext(ctx, `
+		SELECT datname
+		FROM pg_database
+		WHERE datallowconn AND NOT datistemplate
+		  AND has_database_privilege(datname, 'CONNECT')
+		ORDER BY datname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
 }
 
 func (k catalog) pgSchemas(ctx context.Context) ([]string, error) {

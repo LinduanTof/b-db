@@ -3,8 +3,8 @@ package statusbar
 import (
 	"strings"
 
-	"github.com/linduan-guan/b-db/internal/ui/textutil"
-	"github.com/linduan-guan/b-db/internal/ui/theme"
+	"github.com/LinduanTof/b-db/internal/ui/textutil"
+	"github.com/LinduanTof/b-db/internal/ui/theme"
 )
 
 type Model struct {

@@ -6,9 +6,41 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/linduan-guan/b-db/internal/config"
-	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/config"
+	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/i18n"
 )
+
+type fakeConn struct {
+	db.Conn
+	name string
+	typ  string
+}
+
+func (f fakeConn) Name() string { return f.name }
+func (f fakeConn) Type() string { return f.typ }
+
+func TestPostgresDatabaseTree(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "pg", Type: config.TypePostgres, Database: "bdb", Host: "h", User: "u"},
+	}, i18n.New("en"))
+	m.SetSize(40, 12)
+	m.SetDatabases("pg", []DatabaseEntry{
+		{Name: "bdb", Session: "pg"},
+		{Name: "postgres", Session: "pg/postgres"},
+	})
+	m.SetActiveSessions([]string{"pg", "pg/postgres"})
+	if cmd := m.SetDatabaseConn(fakeConn{name: "pg", typ: config.TypePostgres}, "pg", "bdb", "pg"); cmd == nil {
+		t.Fatal("selecting a database should load its schemas")
+	}
+
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"▾ ● ▤ bdb", "▸ ◉ ▤ postgres", "2 active"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
 
 func TestHandleClickConnects(t *testing.T) {
 	m := New([]config.Connection{
@@ -16,7 +48,10 @@ func TestHandleClickConnects(t *testing.T) {
 	}, i18n.New("en"))
 	m.SetSize(30, 10)
 
-	cmd := m.HandleClick(0)
+	if cmd := m.HandleClick(0); cmd != nil {
+		t.Fatal("clicking the header should do nothing")
+	}
+	cmd := m.HandleClick(1)
 	if cmd == nil {
 		t.Fatal("click on a connection should activate it")
 	}
@@ -56,6 +91,61 @@ func TestConnectionIconsAndAlignment(t *testing.T) {
 	}
 }
 
+func TestActiveSessionsInSidebar(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "a", Type: config.TypeSQLite, Path: "a.db"},
+		{Name: "b", Type: config.TypePostgres, Host: "h", User: "u", Database: "d"},
+		{Name: "c", Type: config.TypeMySQL, Host: "h", User: "u", Database: "d"},
+	}, i18n.New("en"))
+	m.SetSize(40, 10)
+	m.connName = "a"
+	m.SetActiveSessions([]string{"a", "b"})
+
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "2 active") {
+		t.Fatalf("session count missing:\n%s", view)
+	}
+	if !strings.Contains(view, "●") || !strings.Contains(view, "◉") || !strings.Contains(view, "○") {
+		t.Fatalf("session markers missing:\n%s", view)
+	}
+}
+
+func TestTableSingleClickSelectsDoubleClickOpens(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "local", Type: config.TypeSQLite, Path: "x.db"},
+	}, i18n.New("en"))
+	m.SetSize(30, 10)
+	table := &Node{Kind: KindTable, Label: "users", Sub: "table", ConnName: "local", Schema: "main", Table: "users"}
+	schema := &Node{Kind: KindSchema, Label: "main", ConnName: "local", Schema: "main", Expanded: true, Children: []*Node{table}}
+	m.roots[0].Expanded = true
+	m.roots[0].Children = []*Node{schema}
+	m.rebuild()
+
+	if cmd := m.HandleClick(3); cmd != nil {
+		t.Fatal("single click on a table should only select it")
+	}
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want table row", m.cursor)
+	}
+	cmd := m.HandleClick(3)
+	if cmd == nil {
+		t.Fatal("double click on a table should open it")
+	}
+	msg, ok := cmd().(TableOpenMsg)
+	if !ok || msg.Schema != "main" || msg.Table != "users" {
+		t.Fatalf("message = %#v", cmd())
+	}
+}
+
+func TestNoConnectionsShowsConfigPath(t *testing.T) {
+	m := New(nil, i18n.New("en"))
+	m.SetSize(80, 10)
+	m.SetConfigPath("/tmp/bdb/config.yaml")
+	if view := m.View(); !strings.Contains(view, "/tmp/bdb/config.yaml") {
+		t.Fatalf("view:\n%s", view)
+	}
+}
+
 func TestHandleClickOutOfRange(t *testing.T) {
 	m := New(nil, i18n.New("en"))
 	m.SetSize(30, 10)
@@ -64,5 +154,19 @@ func TestHandleClickOutOfRange(t *testing.T) {
 	}
 	if cmd := m.HandleClick(-1); cmd != nil {
 		t.Fatal("negative row should do nothing")
+	}
+}
+
+func TestStaleLoadResultIsIgnored(t *testing.T) {
+	m := New(nil, i18n.New("en"))
+	m.epoch = 2
+	node := &Node{Kind: KindConnection, Loading: true}
+	m.Update(SchemasLoadedMsg{Epoch: 1, Node: node, Schemas: []string{"old"}})
+	if !node.Loading || len(node.Children) != 0 {
+		t.Fatalf("stale message mutated node: %+v", node)
+	}
+	m.Update(SchemasLoadedMsg{Epoch: 2, Node: node, Schemas: []string{"current"}})
+	if node.Loading || len(node.Children) != 1 {
+		t.Fatalf("current message not applied: %+v", node)
 	}
 }

@@ -36,6 +36,19 @@ type Conn interface {
 	Capabilities() Capability
 	Catalog() Catalog
 	Querier() Querier
+	Mutator() Mutator
+}
+
+type TableRef struct {
+	Schema string
+	Name   string
+}
+
+type Mutator interface {
+	UpdateCell(ctx context.Context, table TableRef, key map[string]any, column string, value any) (int64, error)
+	DeleteRow(ctx context.Context, table TableRef, key map[string]any) (int64, error)
+	PreviewUpdate(table TableRef, key map[string]any, column string, value any) string
+	PreviewDelete(table TableRef, key map[string]any) string
 }
 
 type Catalog interface {
@@ -45,6 +58,12 @@ type Catalog interface {
 	Indexes(ctx context.Context, schema, table string) ([]Index, error)
 	ForeignKeys(ctx context.Context, schema, table string) ([]ForeignKey, error)
 	DDL(ctx context.Context, schema, table string) (string, error)
+}
+
+// DatabaseLister is implemented by catalogs that can enumerate databases on
+// the server, such as PostgreSQL.
+type DatabaseLister interface {
+	Databases(ctx context.Context) ([]string, error)
 }
 
 type Querier interface {

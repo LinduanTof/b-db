@@ -100,6 +100,7 @@ var (
 	Title       lipgloss.Style
 	Header      lipgloss.Style
 	Muted       lipgloss.Style
+	Footer      lipgloss.Style
 	Error       lipgloss.Style
 	Selected    lipgloss.Style
 	CellCursor  lipgloss.Style
@@ -161,6 +162,7 @@ func Set(name string) string {
 	Title = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.Title))
 	Header = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(p.Header))
 	Muted = lipgloss.NewStyle().Foreground(lipgloss.Color(p.Muted))
+	Footer = lipgloss.NewStyle().Foreground(lipgloss.Color(p.Muted)).Faint(true)
 	Error = lipgloss.NewStyle().Foreground(lipgloss.Color(p.Error))
 	Selected = lipgloss.NewStyle().Background(lipgloss.Color(p.SelectedBG)).Foreground(lipgloss.Color(p.SelectedFG))
 	CellCursor = lipgloss.NewStyle().Background(lipgloss.Color(p.CursorBG)).Foreground(lipgloss.Color(p.CursorFG))

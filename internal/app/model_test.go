@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,14 +12,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/linduan-guan/b-db/internal/config"
-	"github.com/linduan-guan/b-db/internal/history"
-	"github.com/linduan-guan/b-db/internal/i18n"
-	uicomplete "github.com/linduan-guan/b-db/internal/ui/complete"
-	"github.com/linduan-guan/b-db/internal/ui/connection"
-	"github.com/linduan-guan/b-db/internal/ui/menu"
-	"github.com/linduan-guan/b-db/internal/ui/sidebar"
-	"github.com/linduan-guan/b-db/internal/ui/theme"
+	"github.com/LinduanTof/b-db/internal/config"
+	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/history"
+	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/ui/celledit"
+	uicomplete "github.com/LinduanTof/b-db/internal/ui/complete"
+	"github.com/LinduanTof/b-db/internal/ui/confirm"
+	"github.com/LinduanTof/b-db/internal/ui/connection"
+	"github.com/LinduanTof/b-db/internal/ui/menu"
+	"github.com/LinduanTof/b-db/internal/ui/sidebar"
+	"github.com/LinduanTof/b-db/internal/ui/theme"
 )
 
 func testModel(t *testing.T, lang string) *Model {
@@ -27,8 +32,16 @@ func testModel(t *testing.T, lang string) *Model {
 func testModelWithFocus(t *testing.T, lang, focusMode string) *Model {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	dbPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "demo.db"))
+	srcPath, err := filepath.Abs(filepath.Join("..", "..", "testdata", "demo.db"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "demo.db")
+	if err := os.WriteFile(dbPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{
@@ -59,10 +72,11 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			return m
 		}
 		switch msg.(type) {
-		case connOpenedMsg, queryDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
+		case connOpenedMsg, queryDoneMsg, tablePageDoneMsg, databasesLoadedMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
+			editInfoMsg, mutationDoneMsg, celledit.SubmittedMsg, confirm.ConfirmedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
-			sidebar.ConnectMsg, sidebar.SelectTableMsg, sidebar.TableMenuMsg,
+			sidebar.ConnectMsg, sidebar.SelectTableMsg, sidebar.TableMenuMsg, sidebar.TableOpenMsg,
 			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg:
 		default:
 			return m
@@ -399,6 +413,7 @@ func TestColumnCompletion(t *testing.T) {
 
 func TestAddConnectionFromUI(t *testing.T) {
 	m := testModel(t, "en")
+	m.editor.SetValue("SELECT 1;")
 	m = sendKey(t, m, tea.KeyPressMsg{Text: "a"})
 	if !m.connForm.IsOpen() {
 		t.Fatal("'a' should open the connection form")
@@ -420,12 +435,69 @@ func TestAddConnectionFromUI(t *testing.T) {
 	if !strings.Contains(m.sidebar.View(), "smoke") {
 		t.Fatalf("sidebar missing new connection:\n%s", m.sidebar.View())
 	}
+	if m.editor.Value() != "SELECT 1;" {
+		t.Fatalf("unsaved editor content should survive when no session is active, got %q", m.editor.Value())
+	}
 	conns, err := config.LoadRuntimeConnections()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(conns) != 1 || conns[0].Name != "smoke" || conns[0].Path != path {
 		t.Fatalf("saved connections = %+v", conns)
+	}
+}
+
+func TestAddConnectionSavesCurrentSession(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.shutdown()
+
+	m.editor.SetValue("SELECT 42;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.results.Result() == nil {
+		t.Fatal("editor query should produce results")
+	}
+
+	data, err := os.ReadFile(m.cfg.Connections[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "second.db")
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m = runCmd(t, m, m.addConnection(config.Connection{
+		Name: "second",
+		Type: config.TypeSQLite,
+		Path: secondPath,
+	}))
+	if m.connName != "second" || m.conn == nil {
+		t.Fatalf("connection = %q, status=%s", m.connName, m.status)
+	}
+	if m.editor.Value() != "" || m.results.Result() != nil {
+		t.Fatalf("new session should start clean: editor=%q results=%#v", m.editor.Value(), m.results.Result())
+	}
+	if view := ansi.Strip(m.sidebar.View()); !strings.Contains(view, "2 active") {
+		t.Fatalf("sidebar should show two active sessions:\n%s", view)
+	}
+
+	saved, ok := m.sessions["local-sqlite"]
+	if !ok {
+		t.Fatal("previous session was not saved")
+	}
+	if saved.tabs[saved.activeTab].editor.Value() != "SELECT 42;" || saved.results.Result() == nil {
+		t.Fatalf("saved session state = editor %q, results %#v", saved.tabs[saved.activeTab].editor.Value(), saved.results.Result())
+	}
+
+	m = runCmd(t, m, m.switchToConnection("local-sqlite"))
+	if m.connName != "local-sqlite" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+	if m.editor.Value() != "SELECT 42;" || m.results.Result() == nil {
+		t.Fatalf("restored session state = editor %q, results %#v", m.editor.Value(), m.results.Result())
 	}
 }
 
@@ -497,6 +569,7 @@ func TestTableDataAction(t *testing.T) {
 			m.conn.Close()
 		}
 	}()
+	m.editor.SetValue("SELECT 42;")
 
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -510,8 +583,31 @@ func TestTableDataAction(t *testing.T) {
 	if rs == nil || len(rs.Rows) != 5 {
 		t.Fatalf("result = %#v, status=%s", rs, m.status)
 	}
-	if !strings.Contains(m.editor.Value(), "users") {
-		t.Fatalf("editor = %q", m.editor.Value())
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
+	}
+	if got := m.editor.Value(); got != "SELECT 42;" {
+		t.Fatalf("table data must not modify the editor, got %q", got)
+	}
+}
+
+func TestSidebarDoubleClickOpensTableData(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	model, cmd := m.Update(sidebar.TableOpenMsg{Schema: "main", Table: "users", Kind: "table"})
+	m = runCmd(t, model.(*Model), cmd)
+	rs := m.results.Result()
+	if rs == nil || len(rs.Rows) != 5 {
+		t.Fatalf("result = %#v, status=%s", rs, m.status)
+	}
+	if m.focus != focusResults || m.pager == nil {
+		t.Fatalf("focus=%v pager=%#v", m.focus, m.pager)
 	}
 }
 
@@ -542,9 +638,97 @@ func TestTableIndexesAction(t *testing.T) {
 	}
 }
 
+func TestSidebarHeightExcludesPaneTitle(t *testing.T) {
+	m := testModel(t, "en")
+	m.layout()
+	lines := strings.Split(m.sidebar.View(), "\n")
+	want := m.height - 3 // status bar + menu bar + pane title
+	if len(lines) != want {
+		t.Fatalf("sidebar lines = %d, want %d", len(lines), want)
+	}
+}
+
+func TestPostgresDatabaseDiscovery(t *testing.T) {
+	m := testModel(t, "en")
+	pg := config.Connection{
+		Name:     "pg",
+		Type:     config.TypePostgres,
+		Host:     "h",
+		User:     "u",
+		Password: "p",
+		Database: "bdb",
+		ReadOnly: true,
+	}
+	m.cfg.Connections = append(m.cfg.Connections, pg)
+	m.sidebar.AddConnection(pg)
+	if cmd := m.handleDatabasesLoaded(databasesLoadedMsg{
+		id:        m.connectSeq,
+		base:      "pg",
+		databases: []string{"bdb", "other", "postgres"},
+	}); cmd != nil {
+		t.Fatal("database discovery should not return a command")
+	}
+
+	if m.cfg.Find("pg/bdb") != nil {
+		t.Fatal("current database should keep the base connection name")
+	}
+	for _, name := range []string{"other", "postgres"} {
+		logical := "pg/" + name
+		connection := m.cfg.Find(logical)
+		if connection == nil || connection.Database != name || !connection.ReadOnly {
+			t.Fatalf("connection %q = %#v", logical, connection)
+		}
+	}
+	view := ansi.Strip(m.sidebar.View())
+	for _, want := range []string{"pg", "bdb", "other", "postgres"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("sidebar missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestStatusbarSections(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m.focus = focusResults
+	left := m.statusLeft()
+	for _, want := range []string{"Results", "Query 1", "│"} {
+		if !strings.Contains(left, want) {
+			t.Fatalf("status left = %q, missing %q", left, want)
+		}
+	}
+	if strings.Contains(left, "local-sqlite") {
+		t.Fatalf("status left should not repeat the connection: %q", left)
+	}
+	sidebarView := ansi.Strip(m.sidebar.View())
+	for _, want := range []string{"● local-sqlite", "1 active"} {
+		if !strings.Contains(sidebarView, want) {
+			t.Fatalf("sidebar header = %q, missing %q", sidebarView, want)
+		}
+	}
+	m.setStatus(m.t.T(i18n.KeyStatusReady), false)
+	if right := m.statusRight(); !strings.Contains(right, "✓ Ready") {
+		t.Fatalf("ready right = %q", right)
+	}
+	m.setStatus("boom", true)
+	if right := m.statusRight(); !strings.Contains(right, "✗ boom") {
+		t.Fatalf("error right = %q", right)
+	}
+	m.setStatus("", false)
+	if right := m.statusRight(); right != "" {
+		t.Fatalf("empty right = %q", right)
+	}
+}
+
 func TestMouseClickSidebar(t *testing.T) {
 	m := testModel(t, "en")
-	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 1, Button: tea.MouseLeft})
+	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 2, Button: tea.MouseLeft})
 	m = runCmd(t, model.(*Model), cmd)
 	if m.conn == nil {
 		t.Fatalf("click should connect, status=%s", m.status)
@@ -552,6 +736,37 @@ func TestMouseClickSidebar(t *testing.T) {
 	defer m.conn.Close()
 	if m.focus != focusSidebar {
 		t.Fatalf("focus = %v, want sidebar", m.focus)
+	}
+}
+
+func TestMouseDoubleClickOpensTable(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 3, Button: tea.MouseLeft})
+	m = runCmd(t, model.(*Model), cmd)
+	if !strings.Contains(m.sidebar.View(), "users") {
+		t.Fatalf("schema should expand and list tables:\n%s", m.sidebar.View())
+	}
+
+	model, cmd = m.Update(tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.results.Result() != nil {
+		t.Fatal("single click should only select the table")
+	}
+
+	model, cmd = m.Update(tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.results.Result() == nil {
+		t.Fatalf("double click should open table data, status=%s", m.status)
+	}
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
 	}
 }
 
@@ -569,7 +784,7 @@ func TestMouseClickResults(t *testing.T) {
 	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
 	m = runCmd(t, model.(*Model), cmd)
 
-	x := m.sideW + 1 + 7
+	x := m.sideW + 2
 	y := m.editorH + 2 + 3
 	model, _ = m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 	m = model.(*Model)
@@ -701,7 +916,7 @@ func TestMouseClickZoomResults(t *testing.T) {
 	m.zoom = true
 	m.layout()
 
-	model, _ = m.Update(tea.MouseClickMsg{X: 7, Y: 4, Button: tea.MouseLeft})
+	model, _ = m.Update(tea.MouseClickMsg{X: 1, Y: 4, Button: tea.MouseLeft})
 	m = model.(*Model)
 	row, col := m.results.CursorPosition()
 	if row != 0 || col != 0 {
@@ -736,6 +951,191 @@ func TestViewFullCell(t *testing.T) {
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.textView.IsOpen() {
 		t.Fatal("esc should close the cell viewer")
+	}
+}
+
+func TestCellEditFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	if _, _, ok := m.results.Source(); !ok {
+		t.Fatalf("table data should be editable, status=%s", m.status)
+	}
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "e"})
+	if !m.cellEdit.IsOpen() {
+		t.Fatalf("cell editor should open, status=%s", m.status)
+	}
+	m.cellEdit.SetValue("AliceEdited")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.confirm.IsOpen() {
+		t.Fatal("confirm dialog should open after editing")
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "y"})
+
+	rs, err := m.conn.Querier().Query(context.Background(), "SELECT name FROM users WHERE id = 1;", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Rows) != 1 || rs.Rows[0][0] != "AliceEdited" {
+		t.Fatalf("query result = %#v", rs.Rows)
+	}
+	if m.results.Result() == nil {
+		t.Fatal("results should refresh after update")
+	}
+}
+
+func TestDeleteRowFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "x"})
+	if !m.confirm.IsOpen() {
+		t.Fatalf("delete confirm should open, status=%s", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "y"})
+
+	rs, err := m.conn.Querier().Query(context.Background(), "SELECT COUNT(*) FROM users;", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.Rows[0][0] != int64(4) {
+		t.Fatalf("remaining rows = %#v, want 4", rs.Rows[0][0])
+	}
+}
+
+func TestCellEditRejectsReadOnlyOrCustomQuery(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "e"})
+	if m.cellEdit.IsOpen() {
+		t.Fatal("editing should not open for a custom query")
+	}
+	if !strings.Contains(m.status, "table data") {
+		t.Fatalf("status = %q", m.status)
+	}
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.cfg.Connections[0].ReadOnly = true
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "e"})
+	if m.cellEdit.IsOpen() {
+		t.Fatal("editing should not open for a read-only connection")
+	}
+	if !strings.Contains(m.status, "read-only") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestInsertTemplate(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "insert"))
+	if !strings.Contains(m.editor.Value(), "INSERT INTO users") {
+		t.Fatalf("editor = %q", m.editor.Value())
+	}
+	if !strings.Contains(m.editor.Value(), "VALUES") {
+		t.Fatalf("editor = %q", m.editor.Value())
+	}
+}
+
+func TestSessionSwitching(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.shutdown()
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.editor.SetValue("SELECT 1;")
+
+	data, err := os.ReadFile(m.cfg.Connections[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "second.db")
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := config.Connection{Name: "second", Type: config.TypeSQLite, Path: secondPath}
+	m.cfg.Connections = append(m.cfg.Connections, second)
+	m.sidebar.AddConnection(second)
+
+	m = runCmd(t, m, m.switchToConnection("second"))
+	if m.connName != "second" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+	if m.editor.Value() != "" {
+		t.Fatalf("new session editor = %q", m.editor.Value())
+	}
+
+	m.editor.SetValue("SELECT 2;")
+	m = runCmd(t, m, m.switchToConnection("local-sqlite"))
+	if m.connName != "local-sqlite" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+	if m.editor.Value() != "SELECT 1;" {
+		t.Fatalf("restored editor = %q", m.editor.Value())
+	}
+	if m.results.Result() == nil {
+		t.Fatal("results should be restored with the session")
+	}
+	if m.pager == nil || m.pager.schema != "main" || m.pager.table != "users" {
+		t.Fatalf("pager should be restored with the session: %#v", m.pager)
+	}
+}
+
+func TestSessionSwitchCancelsMutation(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		m.sessions = map[string]*session{}
+		m.shutdown()
+	}()
+
+	ran := false
+	m.pendingCmd = m.mutationCmd("update", func(ctx context.Context, _ db.Mutator) (int64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		ran = true
+		return 1, nil
+	})
+	m.saveCurrentSession()
+	msg, ok := m.pendingCmd().(mutationDoneMsg)
+	if !ok {
+		t.Fatalf("mutation message = %T", msg)
+	}
+	if !errors.Is(msg.err, context.Canceled) {
+		t.Fatalf("mutation error = %v, want context.Canceled", msg.err)
+	}
+	if ran {
+		t.Fatal("mutation ran after the session was saved")
 	}
 }
 
@@ -827,6 +1227,33 @@ func TestQueryFlow(t *testing.T) {
 	}
 }
 
+func TestEditorQueryIgnoresMaxRows(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.cfg.Query.MaxRows = 2
+
+	m.editor.SetValue("SELECT * FROM users ORDER BY id;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+
+	rs := m.results.Result()
+	if rs == nil || len(rs.Rows) != 5 || rs.Truncated {
+		t.Fatalf("editor query result = %#v, status=%s", rs, m.status)
+	}
+	if !strings.Contains(m.status, "5 row(s)") || strings.Contains(m.status, "truncated") {
+		t.Fatalf("status = %q", m.status)
+	}
+	if m.pager != nil {
+		t.Fatalf("editor query must not create a table pager: %#v", m.pager)
+	}
+}
+
 func TestSidebarBrowseAndSelect(t *testing.T) {
 	m := testModel(t, "en")
 	m = connect(t, m)
@@ -876,5 +1303,208 @@ func TestExportCSV(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "bdb-export-") {
 		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestCellEditValuePreservesNullAndMultiline(t *testing.T) {
+	value, err := cellEditValue("", editTarget{dataType: "integer", wasNull: true})
+	if err != nil || value != nil {
+		t.Fatalf("empty NULL value = %#v, err = %v", value, err)
+	}
+	value, err = cellEditValue("NULL", editTarget{dataType: "text"})
+	if err != nil || value != nil {
+		t.Fatalf("NULL sentinel = %#v, err = %v", value, err)
+	}
+	value, err = cellEditValue("line1\nline2", editTarget{dataType: "text"})
+	if err != nil || value != "line1\nline2" {
+		t.Fatalf("multiline value = %#v, err = %v", value, err)
+	}
+	value, err = cellEditValue("", editTarget{dataType: "text"})
+	if err != nil || value != "" {
+		t.Fatalf("empty text = %#v, err = %v", value, err)
+	}
+	if _, err := cellEditValue("abc", editTarget{dataType: "integer"}); err == nil {
+		t.Fatal("expected invalid integer error")
+	}
+	value, err = cellEditValue("1 day", editTarget{dataType: "interval"})
+	if err != nil || value != "1 day" {
+		t.Fatalf("interval value = %#v, err = %v", value, err)
+	}
+}
+
+func TestReadOnlyBlocksSQLWrites(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.cfg.Connections[0].ReadOnly = true
+	for _, stmt := range []string{
+		"UPDATE users SET name = 'blocked' WHERE id = 1;",
+		"PRAGMA journal_mode = WAL;",
+		"EXECUTE 'DELETE FROM users';",
+	} {
+		m.editor.SetValue(stmt)
+		if cmd := m.runQuery(); cmd != nil {
+			t.Fatalf("read-only connection should reject %q", stmt)
+		}
+		if !strings.Contains(m.status, "read-only") {
+			t.Fatalf("status = %q", m.status)
+		}
+	}
+	m.editor.SetValue("PRAGMA table_info(users);")
+	if cmd := m.runQuery(); cmd == nil {
+		t.Fatal("read-only PRAGMA introspection should be allowed")
+	}
+	m.cancelQuery()
+	rs, err := m.conn.Querier().Query(context.Background(), "SELECT name FROM users WHERE id = 1;", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rs.Rows) != 1 || rs.Rows[0][0] == "blocked" {
+		t.Fatalf("row changed on read-only connection: %#v", rs.Rows)
+	}
+}
+
+func TestPendingSourceIsolation(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	tableCmd := m.tableData("main", "users")
+	m.editor.SetValue("SELECT 1;")
+	customCmd := m.runQuery()
+	m = runCmd(t, m, customCmd)
+	if _, _, ok := m.results.Source(); ok {
+		t.Fatal("custom query must not inherit the table data source")
+	}
+
+	m = runCmd(t, m, tableCmd)
+	if _, _, ok := m.results.Source(); ok {
+		t.Fatal("stale table query must not attach its source to a newer result")
+	}
+}
+
+func TestStaleAsyncMessagesIgnored(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	stale := m.connectSeq - 1
+
+	model, _ := m.Update(ddlLoadedMsg{id: stale, title: "ddl", text: "SELECT 1;"})
+	m = model.(*Model)
+	if m.textView.IsOpen() {
+		t.Fatal("stale DDL message must not open the viewer")
+	}
+	model, _ = m.Update(indexesLoadedMsg{id: stale, title: "indexes", text: "idx"})
+	m = model.(*Model)
+	if m.textView.IsOpen() {
+		t.Fatal("stale index message must not open the viewer")
+	}
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.focus = focusResults
+	info := m.editInfoCmd("main", "users", "edit")()
+	edit, ok := info.(editInfoMsg)
+	if !ok {
+		t.Fatalf("edit info message = %T", info)
+	}
+	edit.id = stale
+	model, _ = m.Update(edit)
+	m = model.(*Model)
+	if m.cellEdit.IsOpen() {
+		t.Fatal("stale edit info must not open the cell editor")
+	}
+
+	edit.id = m.connectSeq
+	model, _ = m.Update(edit)
+	m = model.(*Model)
+	if !m.cellEdit.IsOpen() {
+		t.Fatalf("current edit info should open the cell editor, status=%s", m.status)
+	}
+	m.cellEdit.Close()
+
+	m.setStatus("keep", false)
+	model, _ = m.Update(mutationDoneMsg{id: stale, kind: "update", affected: 1})
+	m = model.(*Model)
+	if m.status != "keep" {
+		t.Fatalf("stale mutation changed status to %q", m.status)
+	}
+	model, _ = m.Update(scriptDoneMsg{id: stale, total: 3, executed: 2})
+	m = model.(*Model)
+	if m.status != "keep" {
+		t.Fatalf("stale script changed status to %q", m.status)
+	}
+}
+
+func TestAddConnectionExpandsEnv(t *testing.T) {
+	m := testModel(t, "en")
+	path := filepath.Join(t.TempDir(), "env.db")
+	t.Setenv("BDB_TEST_DB_PATH", path)
+	cmd := m.addConnection(config.Connection{
+		Name: "env-sqlite",
+		Type: config.TypeSQLite,
+		Path: "${BDB_TEST_DB_PATH}",
+	})
+	if cmd == nil {
+		t.Fatalf("addConnection returned no command: %s", m.status)
+	}
+	m = runCmd(t, m, cmd)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	if m.connName != "env-sqlite" {
+		t.Fatalf("connected to %q, want env-sqlite", m.connName)
+	}
+	conn := m.cfg.Find("env-sqlite")
+	if conn == nil || conn.Path != path {
+		t.Fatalf("runtime config path = %#v, want %q", conn, path)
+	}
+	data, err := os.ReadFile(config.RuntimeConnectionsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "${BDB_TEST_DB_PATH}") {
+		t.Fatalf("runtime file should keep the env reference:\n%s", data)
+	}
+}
+
+func TestModalOverlaysBlockMouse(t *testing.T) {
+	m := testModel(t, "en")
+	if m.anyOverlayOpen() {
+		t.Fatal("no overlay should be open initially")
+	}
+	m.cellEdit.Open("Edit", "value")
+	if !m.anyOverlayOpen() {
+		t.Fatal("cell editor should block mouse interaction")
+	}
+	m.cellEdit.Close()
+	m.confirm.Open("Confirm", "statement")
+	if !m.anyOverlayOpen() {
+		t.Fatal("confirm dialog should block mouse interaction")
+	}
+}
+
+func TestStaleConnectionResponseIgnored(t *testing.T) {
+	m := testModel(t, "en")
+	m.connectSeq = 2
+	m.setStatus("current", false)
+	m = runCmd(t, m, func() tea.Msg {
+		return connOpenedMsg{id: 1, name: "stale", err: errors.New("stale")}
+	})
+	if m.status != "current" {
+		t.Fatalf("stale response changed status to %q", m.status)
 	}
 }

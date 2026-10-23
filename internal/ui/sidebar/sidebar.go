@@ -2,53 +2,64 @@ package sidebar
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/linduan-guan/b-db/internal/config"
-	"github.com/linduan-guan/b-db/internal/db"
-	"github.com/linduan-guan/b-db/internal/i18n"
-	"github.com/linduan-guan/b-db/internal/ui/textutil"
-	"github.com/linduan-guan/b-db/internal/ui/theme"
+	"github.com/LinduanTof/b-db/internal/config"
+	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/ui/textutil"
+	"github.com/LinduanTof/b-db/internal/ui/theme"
 )
 
 type NodeKind int
 
 const (
 	KindConnection NodeKind = iota
+	KindDatabase
 	KindSchema
 	KindTable
 	KindColumn
 )
 
 type Node struct {
-	Kind     NodeKind
-	Label    string
-	Sub      string
-	ConnName string
-	Schema   string
-	Table    string
-	Depth    int
-	Expanded bool
-	Loading  bool
-	Children []*Node
+	Kind        NodeKind
+	Label       string
+	Sub         string
+	ConnName    string
+	SessionName string
+	Schema      string
+	Table       string
+	Depth       int
+	Expanded    bool
+	Loading     bool
+	Children    []*Node
+}
+
+type DatabaseEntry struct {
+	Name    string
+	Session string
 }
 
 type SchemasLoadedMsg struct {
+	Epoch   uint64
 	Node    *Node
 	Schemas []string
 	Err     error
 }
 
 type TablesLoadedMsg struct {
+	Epoch   uint64
 	Node    *Node
 	Objects []db.Object
 	Err     error
 }
 
 type ColumnsLoadedMsg struct {
+	Epoch   uint64
 	Node    *Node
 	Columns []db.Column
 	Err     error
@@ -56,9 +67,13 @@ type ColumnsLoadedMsg struct {
 
 type ConnectMsg struct{ Name string }
 
-type SelectTableMsg struct{ Schema, Table string }
+type DatabaseMsg struct{ Session string }
 
-type TableMenuMsg struct{ Schema, Table string }
+type SelectTableMsg struct{ Schema, Table, Kind string }
+
+type TableMenuMsg struct{ Schema, Table, Kind string }
+
+type TableOpenMsg struct{ Schema, Table, Kind string }
 
 func MsgError(msg any) error {
 	switch m := msg.(type) {
@@ -81,8 +96,17 @@ type Model struct {
 	cursor        int
 	offset        int
 
+	lastClickIndex int
+	lastClickAt    time.Time
+
 	conn     db.Conn
 	connName string
+	epoch    uint64
+
+	activeSessions map[string]bool
+	currentLabel   string
+
+	configPath string
 }
 
 func New(connections []config.Connection, t *i18n.Translator) Model {
@@ -104,9 +128,65 @@ func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 }
 
+func (m *Model) SetConfigPath(path string) {
+	m.configPath = path
+}
+
+func (m *Model) SetActiveSessions(names []string) {
+	m.activeSessions = make(map[string]bool, len(names))
+	for _, name := range names {
+		if name != "" {
+			m.activeSessions[name] = true
+		}
+	}
+}
+
+func (m *Model) isActive(name string) bool {
+	if name == "" {
+		return false
+	}
+	if name == m.connName || m.activeSessions[name] {
+		return true
+	}
+	prefix := name + "/"
+	if strings.HasPrefix(m.connName, prefix) {
+		return true
+	}
+	for session := range m.activeSessions {
+		if strings.HasPrefix(session, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) isCurrentRoot(name string) bool {
+	return name != "" && (name == m.connName || strings.HasPrefix(m.connName, name+"/"))
+}
+
+func (m *Model) isSessionActive(name string) bool {
+	return name != "" && (name == m.connName || m.activeSessions[name])
+}
+
+func (m *Model) sessionCount() int {
+	seen := make(map[string]bool, len(m.activeSessions)+1)
+	for name := range m.activeSessions {
+		if name != "" {
+			seen[name] = true
+		}
+	}
+	if m.connName != "" {
+		seen[m.connName] = true
+	}
+	return len(seen)
+}
+
 func (m *Model) SetConn(conn db.Conn) tea.Cmd {
+	m.epoch++
+	epoch := m.epoch
 	m.conn = conn
 	m.connName = conn.Name()
+	m.currentLabel = ""
 	for _, root := range m.roots {
 		root.Children = nil
 		root.Expanded = false
@@ -117,11 +197,105 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 			root.Expanded = true
 			root.Loading = true
 			m.rebuild()
-			return loadSchemas(conn, root)
+			return loadSchemas(conn, root, epoch)
 		}
 	}
 	m.rebuild()
 	return nil
+}
+
+func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) tea.Cmd {
+	m.epoch++
+	epoch := m.epoch
+	m.conn = conn
+	m.connName = session
+	m.currentLabel = database
+
+	var root *Node
+	for _, candidate := range m.roots {
+		candidate.Expanded = candidate.ConnName == base
+		if candidate.ConnName == base {
+			root = candidate
+		}
+		for _, child := range candidate.Children {
+			if child.Kind == KindDatabase {
+				child.Expanded = false
+				child.Loading = false
+				child.Children = nil
+			}
+		}
+	}
+	if root == nil {
+		m.rebuild()
+		return nil
+	}
+	var dbNode *Node
+	for _, child := range root.Children {
+		if child.Kind == KindDatabase && child.SessionName == session {
+			dbNode = child
+			break
+		}
+	}
+	if dbNode == nil {
+		dbNode = &Node{Kind: KindDatabase, ConnName: session, SessionName: session}
+		root.Children = append(root.Children, dbNode)
+	}
+	dbNode.Label = database
+	dbNode.ConnName = session
+	dbNode.SessionName = session
+	dbNode.Expanded = true
+	dbNode.Loading = true
+	root.Expanded = true
+	m.rebuild()
+	return loadSchemas(conn, dbNode, epoch)
+}
+
+func (m *Model) SetDatabases(base string, entries []DatabaseEntry) {
+	var root *Node
+	for _, candidate := range m.roots {
+		if candidate.ConnName == base {
+			root = candidate
+			break
+		}
+	}
+	if root == nil {
+		return
+	}
+	existing := make(map[string]*Node, len(root.Children))
+	for _, child := range root.Children {
+		if child.Kind == KindDatabase {
+			existing[child.SessionName] = child
+		}
+	}
+	nodes := make([]*Node, 0, len(entries)+len(existing))
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry.Name == "" || entry.Session == "" || seen[entry.Session] {
+			continue
+		}
+		seen[entry.Session] = true
+		node := existing[entry.Session]
+		if node == nil {
+			node = &Node{Kind: KindDatabase, ConnName: entry.Session, SessionName: entry.Session}
+		}
+		node.Label = entry.Name
+		node.ConnName = entry.Session
+		node.SessionName = entry.Session
+		if !m.isSessionActive(entry.Session) {
+			node.Expanded = false
+			node.Loading = false
+			node.Children = nil
+		}
+		nodes = append(nodes, node)
+	}
+	for session, node := range existing {
+		if !seen[session] && m.isSessionActive(session) {
+			nodes = append(nodes, node)
+		}
+	}
+	root.Children = nodes
+	root.Expanded = true
+	m.rebuild()
 }
 
 func (m *Model) AddConnection(c config.Connection) {
@@ -139,6 +313,15 @@ func (m *Model) AddConnection(c config.Connection) {
 	m.rebuild()
 }
 
+func (m *Model) connectionLabel(name string) string {
+	for _, root := range m.roots {
+		if root.ConnName == name {
+			return root.Label
+		}
+	}
+	return name
+}
+
 func (m *Model) SelectedTable() (schema, table string, ok bool) {
 	n := m.selected()
 	if n == nil || n.Kind != KindTable {
@@ -148,8 +331,10 @@ func (m *Model) SelectedTable() (schema, table string, ok bool) {
 }
 
 func (m *Model) ClearConn() {
+	m.epoch++
 	m.conn = nil
 	m.connName = ""
+	m.currentLabel = ""
 	for _, root := range m.roots {
 		root.Children = nil
 		root.Expanded = false
@@ -163,6 +348,9 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return *m, m.handleKey(msg)
 	case SchemasLoadedMsg:
+		if msg.Epoch != m.epoch {
+			return *m, nil
+		}
 		msg.Node.Loading = false
 		if msg.Err == nil {
 			children := make([]*Node, 0, len(msg.Schemas))
@@ -180,6 +368,9 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.rebuild()
 		return *m, nil
 	case TablesLoadedMsg:
+		if msg.Epoch != m.epoch {
+			return *m, nil
+		}
 		msg.Node.Loading = false
 		if msg.Err == nil {
 			children := make([]*Node, 0, len(msg.Objects))
@@ -199,6 +390,9 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.rebuild()
 		return *m, nil
 	case ColumnsLoadedMsg:
+		if msg.Epoch != m.epoch {
+			return *m, nil
+		}
 		msg.Node.Loading = false
 		if msg.Err == nil {
 			children := make([]*Node, 0, len(msg.Columns))
@@ -246,7 +440,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		n := m.selected()
 		if n != nil && n.Kind == KindTable {
 			return func() tea.Msg {
-				return SelectTableMsg{Schema: n.Schema, Table: n.Table}
+				return SelectTableMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
 			}
 		}
 	case "r":
@@ -262,26 +456,59 @@ func (m *Model) activate() tea.Cmd {
 	if n == nil {
 		return nil
 	}
-	if n.Kind == KindConnection && n.ConnName != m.connName {
+	if n.Kind == KindConnection && !m.isCurrentRoot(n.ConnName) {
 		name := n.ConnName
 		return func() tea.Msg { return ConnectMsg{Name: name} }
 	}
+	if n.Kind == KindDatabase && n.SessionName != m.connName {
+		session := n.SessionName
+		return func() tea.Msg { return DatabaseMsg{Session: session} }
+	}
 	if n.Kind == KindTable {
-		schema, table := n.Schema, n.Table
-		return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table} }
+		schema, table, kind := n.Schema, n.Table, n.Sub
+		return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table, Kind: kind} }
 	}
 	return m.toggle(n)
 }
 
 func (m *Model) HandleClick(row int) tea.Cmd {
+	row -= m.headerHeight()
 	if row < 0 {
+		m.lastClickIndex = -1
 		return nil
 	}
 	index := m.offset + row
 	if index < 0 || index >= len(m.flat) {
+		m.lastClickIndex = -1
 		return nil
 	}
+	double := index == m.lastClickIndex && time.Since(m.lastClickAt) < 400*time.Millisecond
+	if double {
+		m.lastClickIndex = -1
+	} else {
+		m.lastClickIndex = index
+		m.lastClickAt = time.Now()
+	}
 	m.cursor = index
+	node := m.flat[index]
+	if node.Kind == KindTable {
+		if double {
+			schema, table, kind := node.Schema, node.Table, node.Sub
+			return func() tea.Msg {
+				return TableOpenMsg{Schema: schema, Table: table, Kind: kind}
+			}
+		}
+		return nil
+	}
+	if node.Kind == KindDatabase {
+		if double {
+			return m.activate()
+		}
+		return nil
+	}
+	if double {
+		return nil
+	}
 	return m.activate()
 }
 
@@ -304,6 +531,19 @@ func (m *Model) move(delta int) {
 }
 
 func (m *Model) toggle(n *Node) tea.Cmd {
+	if n.Kind == KindConnection && n.Sub == config.TypePostgres {
+		if !m.isCurrentRoot(n.ConnName) {
+			name := n.ConnName
+			return func() tea.Msg { return ConnectMsg{Name: name} }
+		}
+		n.Expanded = !n.Expanded
+		m.rebuild()
+		return nil
+	}
+	if n.Kind == KindDatabase && n.SessionName != m.connName {
+		session := n.SessionName
+		return func() tea.Msg { return DatabaseMsg{Session: session} }
+	}
 	if n.Expanded {
 		n.Expanded = false
 		m.rebuild()
@@ -321,15 +561,19 @@ func (m *Model) toggle(n *Node) tea.Cmd {
 	case KindConnection:
 		n.Loading = true
 		m.rebuild()
-		return loadSchemas(m.conn, n)
+		return loadSchemas(m.conn, n, m.epoch)
+	case KindDatabase:
+		n.Loading = true
+		m.rebuild()
+		return loadSchemas(m.conn, n, m.epoch)
 	case KindSchema:
 		n.Loading = true
 		m.rebuild()
-		return loadTables(m.conn, n)
+		return loadTables(m.conn, n, m.epoch)
 	case KindTable:
 		n.Loading = true
 		m.rebuild()
-		return loadColumns(m.conn, n)
+		return loadColumns(m.conn, n, m.epoch)
 	}
 	return nil
 }
@@ -337,10 +581,15 @@ func (m *Model) toggle(n *Node) tea.Cmd {
 func (m *Model) reload(n *Node) tea.Cmd {
 	switch n.Kind {
 	case KindConnection:
-		if m.conn == nil || m.conn.Name() != n.ConnName {
+		if !m.isCurrentRoot(n.ConnName) {
 			return nil
 		}
-	case KindSchema, KindTable:
+		if n.Sub == config.TypePostgres {
+			n.Expanded = true
+			m.rebuild()
+			return nil
+		}
+	case KindDatabase, KindSchema, KindTable:
 	default:
 		return nil
 	}
@@ -374,29 +623,82 @@ func (m *Model) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
+	header := m.renderHeader()
+	bodyH := m.height - m.headerHeight()
+	if bodyH < 1 {
+		return textutil.FitLine(header, m.width)
+	}
 	if len(m.flat) == 0 {
-		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoConnections)), m.width, m.height)
+		message := textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoConnections, m.configPath)), m.width, bodyH)
+		return textutil.FitLines(header+"\n"+message, m.width, m.height)
 	}
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}
-	if m.cursor >= m.offset+m.height {
-		m.offset = m.cursor - m.height + 1
+	if m.cursor >= m.offset+bodyH {
+		m.offset = m.cursor - bodyH + 1
 	}
 	if m.offset < 0 {
 		m.offset = 0
 	}
-	maxOffset := max(0, len(m.flat)-m.height)
+	maxOffset := max(0, len(m.flat)-bodyH)
 	if m.offset > maxOffset {
 		m.offset = maxOffset
 	}
 
 	lines := make([]string, 0, m.height)
+	lines = append(lines, header)
 	labelWidth := m.connectionLabelWidth()
 	for i := m.offset; i < len(m.flat) && len(lines) < m.height; i++ {
 		lines = append(lines, m.renderNode(m.flat[i], i == m.cursor, labelWidth))
 	}
 	return textutil.FitLines(strings.Join(lines, "\n"), m.width, m.height)
+}
+
+func (m *Model) headerHeight() int {
+	return 1
+}
+
+func (m *Model) renderHeader() string {
+	name := m.t.T(i18n.KeyStatusNoConnection)
+	typ := ""
+	dot := "○"
+	styledDot := theme.Muted.Render(dot)
+	styledName := theme.Muted.Render(name)
+	if m.connName != "" {
+		name = m.connectionLabel(m.connName)
+		if m.currentLabel != "" {
+			name = m.currentLabel
+		}
+		dot = "●"
+		styledDot = theme.Title.Render(dot)
+		styledName = theme.Title.Render(name)
+		if m.conn != nil {
+			typ = m.conn.Type()
+		} else {
+			for _, root := range m.roots {
+				if root.ConnName == m.connName {
+					typ = root.Sub
+					break
+				}
+			}
+		}
+	}
+	plain := " " + dot + " " + name
+	styled := " " + styledDot + " " + styledName
+	count := fmt.Sprintf(m.t.T(i18n.KeySidebarActive), m.sessionCount())
+	available := max(0, m.width-textutil.Width(count)-2)
+	if typ != "" && textutil.Width(plain)+2+textutil.Width(typ) <= available {
+		plain += "  " + typ
+		styled += "  " + theme.Muted.Render(typ)
+	}
+	if textutil.Width(plain) > available {
+		plain = textutil.Truncate(plain, available)
+		styled = textutil.Truncate(styled, available)
+	}
+	gap := max(0, m.width-textutil.Width(plain)-textutil.Width(count)-2)
+	line := styled + " " + theme.Muted.Render(strings.Repeat("─", gap)) + " " + theme.Muted.Render(count)
+	return textutil.FitLine(line, m.width)
 }
 
 func (m *Model) connectionLabelWidth() int {
@@ -408,38 +710,98 @@ func (m *Model) connectionLabelWidth() int {
 }
 
 func (m *Model) renderNode(n *Node, selected bool, labelWidth int) string {
+	plain, styled := m.nodeLine(n, labelWidth)
+	plain = textutil.FitLine(plain, m.width)
+	if selected {
+		return theme.Selected.Render(plain)
+	}
+	return textutil.FitLine(styled, m.width)
+}
+
+func (m *Model) nodeLine(n *Node, labelWidth int) (string, string) {
 	indent := strings.Repeat("  ", n.Depth)
-	var text string
+	var plain, styled string
+	subGap := 0
 	switch n.Kind {
 	case KindConnection:
-		status := "○"
-		if n.ConnName == m.connName {
-			status = "●"
-		}
-		text = indent + status + " " + pad(typeIcon(n.Sub), 2) + " " + pad(n.Label, labelWidth)
-	case KindSchema, KindTable:
-		marker := "▸"
+		caret := "▸"
 		if n.Expanded {
-			marker = "▾"
+			caret = "▾"
 		}
-		text = indent + marker + " " + n.Label
+		dot := "○"
+		styledDot := theme.Muted.Render(dot)
+		styledName := n.Label
+		if m.isCurrentRoot(n.ConnName) {
+			dot, styledDot = "●", theme.Title.Render("●")
+			styledName = theme.Title.Render(n.Label)
+		} else if m.isActive(n.ConnName) {
+			dot, styledDot = "◉", theme.Header.Render("◉")
+			styledName = theme.Header.Render(n.Label)
+		}
+		icon := typeIcon(n.Sub)
+		plain = indent + caret + " " + dot + " " + icon + " " + pad(n.Label, labelWidth)
+		styled = theme.Muted.Render(indent+caret) + " " + styledDot + " " +
+			theme.Header.Render(icon) + " " + pad(styledName, labelWidth)
+		subGap = 2
+	case KindDatabase:
+		caret := "▸"
+		if n.Expanded {
+			caret = "▾"
+		}
+		current := n.SessionName == m.connName
+		active := current || m.isSessionActive(n.SessionName)
+		dot := "○"
+		styledDot := theme.Muted.Render(dot)
+		styledName := n.Label
+		if current {
+			dot, styledDot = "●", theme.Title.Render("●")
+			styledName = theme.Title.Render(n.Label)
+		} else if active {
+			dot, styledDot = "◉", theme.Header.Render("◉")
+			styledName = theme.Header.Render(n.Label)
+		}
+		plain = indent + caret + " " + dot + " ▤ " + n.Label
+		styled = theme.Muted.Render(indent+caret) + " " + styledDot + " " +
+			theme.Header.Render("▤") + " " + styledName
+	case KindSchema:
+		caret := "▸"
+		if n.Expanded {
+			caret = "▾"
+		}
+		plain = indent + caret + " " + n.Label
+		styled = theme.Muted.Render(indent+caret) + " " + theme.Header.Render(n.Label)
+	case KindTable:
+		caret := "▸"
+		if n.Expanded {
+			caret = "▾"
+		}
+		icon := tableIcon(n.Sub)
+		plain = indent + caret + " " + icon + " " + n.Label
+		styled = theme.Muted.Render(indent+caret) + " " + theme.Header.Render(icon) + " " + n.Label
 	case KindColumn:
-		text = indent + "· " + n.Label
-	}
-	if n.Sub != "" {
-		text += "  " + n.Sub
+		plain = indent + "· " + n.Label
+		styled = theme.Muted.Render(indent + "· " + n.Label)
 	}
 	if n.Loading {
-		text += " …"
+		plain += " …"
+		styled += " " + theme.Muted.Render("…")
 	}
-	text = textutil.FitLine(text, m.width)
-	if selected {
-		return theme.Selected.Render(text)
+	if n.Sub != "" {
+		gap := subGap
+		if gap == 0 {
+			gap = max(1, m.width-textutil.Width(plain)-textutil.Width(n.Sub)-1)
+		}
+		plain += strings.Repeat(" ", gap) + n.Sub
+		styled += strings.Repeat(" ", gap) + theme.Muted.Render(n.Sub)
 	}
-	if n.Kind == KindColumn {
-		return theme.Muted.Render(text)
+	return plain, styled
+}
+
+func pad(s string, width int) string {
+	if d := width - textutil.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
 	}
-	return text
+	return s
 }
 
 func (m *Model) PreferredWidth() int {
@@ -448,7 +810,7 @@ func (m *Model) PreferredWidth() int {
 	for _, root := range m.roots {
 		subWidth = max(subWidth, textutil.Width(root.Sub))
 	}
-	return 5 + labelWidth + 2 + subWidth
+	return 8 + labelWidth + 2 + subWidth
 }
 
 func typeIcon(typ string) string {
@@ -468,38 +830,42 @@ func typeIcon(typ string) string {
 	}
 }
 
-func pad(s string, width int) string {
-	if d := width - textutil.Width(s); d > 0 {
-		return s + strings.Repeat(" ", d)
+func tableIcon(kind string) string {
+	switch strings.ToLower(kind) {
+	case "view":
+		return "◇"
+	case "materialized view":
+		return "◆"
+	default:
+		return "▦"
 	}
-	return s
 }
 
-func loadSchemas(conn db.Conn, node *Node) tea.Cmd {
+func loadSchemas(conn db.Conn, node *Node, epoch uint64) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		schemas, err := conn.Catalog().Schemas(ctx)
-		return SchemasLoadedMsg{Node: node, Schemas: schemas, Err: err}
+		return SchemasLoadedMsg{Epoch: epoch, Node: node, Schemas: schemas, Err: err}
 	}
 }
 
-func loadTables(conn db.Conn, node *Node) tea.Cmd {
+func loadTables(conn db.Conn, node *Node, epoch uint64) tea.Cmd {
 	schema := node.Schema
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		objects, err := conn.Catalog().Tables(ctx, schema)
-		return TablesLoadedMsg{Node: node, Objects: objects, Err: err}
+		return TablesLoadedMsg{Epoch: epoch, Node: node, Objects: objects, Err: err}
 	}
 }
 
-func loadColumns(conn db.Conn, node *Node) tea.Cmd {
+func loadColumns(conn db.Conn, node *Node, epoch uint64) tea.Cmd {
 	schema, table := node.Schema, node.Table
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		cols, err := conn.Catalog().Columns(ctx, schema, table)
-		return ColumnsLoadedMsg{Node: node, Columns: cols, Err: err}
+		return ColumnsLoadedMsg{Epoch: epoch, Node: node, Columns: cols, Err: err}
 	}
 }

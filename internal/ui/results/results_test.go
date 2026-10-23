@@ -7,8 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/linduan-guan/b-db/internal/db"
-	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/i18n"
 )
 
 func sample(rows int) *db.ResultSet {
@@ -52,6 +52,72 @@ func TestViewDimensionsAndCJK(t *testing.T) {
 	}
 	if !strings.Contains(view, "NULL") {
 		t.Fatalf("view missing NULL marker:\n%s", view)
+	}
+}
+
+func TestPageFooter(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(120, 12)
+	m.SetResult(sample(5))
+	m.SetPage(`SELECT * FROM "users" ORDER BY "id" LIMIT 100 OFFSET 0;`, "count 5 · Page 1 · 5 row(s) · time 12ms")
+
+	if got := m.bodyRows(); got != 7 {
+		t.Fatalf("bodyRows = %d, want 7 with one footer line", got)
+	}
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 12 {
+		t.Fatalf("lines = %d, want 12", len(lines))
+	}
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != 120 {
+			t.Fatalf("line %d width = %d, want 120: %q", i, w, line)
+		}
+	}
+	footer := ansi.Strip(lines[len(lines)-1])
+	if !strings.Contains(footer, "SQL:") || !strings.Contains(footer, "OFFSET 0") ||
+		!strings.Contains(footer, "count 5") || !strings.Contains(footer, "Page 1") {
+		t.Fatalf("footer = %q\n%s", footer, view)
+	}
+
+	m.SetResult(sample(1))
+	if strings.Contains(m.View(), "OFFSET 0") {
+		t.Fatal("new result should clear the page footer")
+	}
+	if got := m.bodyRows(); got != 8 {
+		t.Fatalf("bodyRows = %d, want 8 without footer", got)
+	}
+}
+
+func TestPageFooterKeepsMetaWhenNarrow(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(40, 10)
+	m.SetResult(sample(2))
+	m.SetPage(`SELECT * FROM "a_very_long_table_name" ORDER BY "id" LIMIT 100 OFFSET 0;`, "count 100 · Page 3 · 2 row(s) · time 12ms")
+	footer := ansi.Strip(strings.Split(m.View(), "\n")[m.height-1])
+	if !strings.Contains(footer, "SQL:") || !strings.Contains(footer, "count 100") || !strings.Contains(footer, "Page 3") {
+		t.Fatalf("footer = %q", footer)
+	}
+	if ansi.StringWidth(footer) != 40 {
+		t.Fatalf("footer width = %d, want 40", ansi.StringWidth(footer))
+	}
+}
+
+func TestSortIndicator(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 10)
+	m.SetResult(sample(3))
+	m.SetSort(0, true)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "id↑") {
+		t.Fatalf("ascending indicator missing:\n%s", view)
+	}
+	m.SetSort(0, false)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "id↓") {
+		t.Fatalf("descending indicator missing:\n%s", view)
+	}
+	m.SetSort(-1, true)
+	if view := ansi.Strip(m.View()); strings.Contains(view, "id↑") || strings.Contains(view, "id↓") {
+		t.Fatalf("sort indicator should be cleared:\n%s", view)
 	}
 }
 
@@ -158,15 +224,15 @@ func TestHandleClick(t *testing.T) {
 	m.SetSize(60, 12)
 	m.SetResult(sample(10))
 
-	if !m.HandleClick(7, 3) {
+	if !m.HandleClick(1, 3) {
 		t.Fatal("click on a data cell should be handled")
 	}
 	row, col := m.CursorPosition()
 	if row != 0 || col != 0 {
 		t.Fatalf("cursor = %d,%d, want 0,0", row, col)
 	}
-	if !m.HandleClick(2, 4) {
-		t.Fatal("click on the row number should be handled")
+	if !m.HandleClick(1, 4) {
+		t.Fatal("click on the first column should be handled")
 	}
 	row, _ = m.CursorPosition()
 	if row != 1 {
@@ -249,5 +315,42 @@ func TestNoResultPromptAndExec(t *testing.T) {
 	m.SetError("boom")
 	if got := m.View(); !strings.Contains(got, "boom") {
 		t.Fatalf("error view = %q", got)
+	}
+}
+
+func TestCursorValuePreservesRawData(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 10)
+	m.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "note"}, {Name: "body"}},
+		Rows:    [][]any{{nil, "line1\nline2"}},
+	})
+
+	m.cursorCol = 0
+	if value, ok := m.CursorValue(); !ok || value != nil {
+		t.Fatalf("NULL value = %#v, ok = %v", value, ok)
+	}
+	m.cursorCol = 1
+	if value, ok := m.CursorValue(); !ok || value != "line1\nline2" {
+		t.Fatalf("multiline value = %#v, ok = %v", value, ok)
+	}
+}
+
+func TestOrderedResultFollowsSort(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 10)
+	m.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "name"}},
+		Rows:    [][]any{{"b"}, {"a"}},
+	})
+	m.cursorCol = 0
+	m.toggleSort()
+
+	rs := m.OrderedResult()
+	if rs == nil || len(rs.Rows) != 2 || rs.Rows[0][0] != "a" || rs.Rows[1][0] != "b" {
+		t.Fatalf("ordered rows = %#v", rs)
+	}
+	if m.Result().Rows[0][0] != "b" {
+		t.Fatal("original result should not be reordered")
 	}
 }

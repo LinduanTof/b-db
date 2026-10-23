@@ -2,19 +2,21 @@
 
 一款面向 Linux 终端的现代化数据库管理工具，使用 Go + [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) 构建。目标是在一个终端窗口内完成连接管理、库表浏览、SQL 编辑执行、数据编辑与导出。
 
-当前完成 **P1**：PostgreSQL/SQLite/MySQL 浏览与查询、表结构详情、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、结果网格增强、6 套可持久化主题、SQL 语法高亮与自动补全，以及界面内添加数据源。
+已完成：PostgreSQL/MySQL/SQLite 浏览与查询、事务化数据编辑、Redis/MongoDB、多会话、表结构/DDL/索引、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、6 套主题、SQL 语法高亮与自动补全、专注布局与鼠标操作。
 
 ## 快速开始
 
 要求 Go 1.26+。
 
 ```bash
+go install github.com/LinduanTof/b-db/cmd/bdb@latest
+# 或本地构建
 make demo-db     # 生成 SQLite 示例库 testdata/demo.db
 make build
 ./bin/bdb --config config.example.yaml
 ```
 
-默认配置文件路径为 `$XDG_CONFIG_HOME/bdb/config.yaml`（通常是 `~/.config/bdb/config.yaml`），可用 `--config` 覆盖。
+默认配置文件路径为 `$XDG_CONFIG_HOME/bdb/config.yaml`（通常是 `~/.config/bdb/config.yaml`），可用 `--config` 覆盖。首次启动时若文件不存在，会自动创建一份带注释的默认模板（权限 `0600`），不会覆盖已有文件。
 
 配置文件最小示例：
 
@@ -26,7 +28,7 @@ ui:
   focus_mode: manual      # manual | auto
 query:
   timeout: 30s
-  max_rows: 1000
+  max_rows: 1000          # 表数据浏览每页行数；编辑器查询不限制
 connections:
   - name: local
     type: sqlite
@@ -68,14 +70,21 @@ connections:
 | 连接 | `a` | 添加数据源（侧栏/结果焦点） |
 | 连接 | `r` | 重新加载当前节点 |
 | 编辑器 | `Ctrl+Enter` / `F5` | 执行 SQL |
+| 编辑器 | `Ctrl+T` | 新建 SQL 标签 |
+| 编辑器 | `Ctrl+W` | 关闭当前 SQL 标签（最后一个标签不可关闭） |
+| 编辑器 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 下一个 / 上一个标签 |
+| 编辑器 | `Alt+←` / `Alt+→` | 切换标签（终端不支持 `Ctrl+Tab` 时使用） |
 | 编辑器 | `Ctrl+Space` | 手动触发 SQL 补全 |
 | 编辑器 | `Ctrl+P` / `Ctrl+N` | 查询历史 |
 | 编辑器 | `Esc` | 取消正在执行的查询 |
 | 结果 | 方向键 / `hjkl` | 移动单元格 |
+| 结果 | `n` / `p` | 下一页 / 上一页（表数据分页） |
 | 结果 | `PgUp` / `PgDn` | 翻页 |
 | 结果 | `g` / `G` | 首行 / 末行 |
 | 结果 | `H` / `L` | 向左 / 向右翻一屏列 |
 | 结果 | `Enter` / `v` | 查看当前单元格的完整内容 |
+| 结果 | `e` | 编辑当前单元格 |
+| 结果 | `x` | 删除当前行 |
 | 结果 | `[` / `]` | 减小 / 增大当前列宽 |
 | 结果 | `o` / `O` | 按当前列排序（升/降）/ 清除排序 |
 | 结果 | `c` | 复制当前单元格（OSC 52） |
@@ -89,7 +98,7 @@ connections:
 
 - `↑`/`↓` 移动选项，`←`/`→` 调整设置值，`Enter` 执行操作，`Esc` 关闭
 - 操作：添加数据源、断开连接、导出 CSV/JSON/Markdown、帮助、退出
-- 设置：主题、界面语言、查询超时、结果最大行数，修改即时生效
+- 设置：主题、界面语言、查询超时、表数据每页行数，修改即时生效
 - 底部菜单栏常驻显示 `Esc 菜单`、`q 退出`、`? 帮助`
 
 菜单打开时按 `q` 可直接退出。
@@ -102,16 +111,16 @@ connections:
 ./bin/bdb --config config.yaml ./migrations/001_init.sql
 ```
 
-脚本按分号切分，支持单引号/双引号/反引号字符串、`--`、`#`、`/* */` 注释；任一语句失败会停止并报告语句序号。执行期间可按 `Esc` 取消。
+脚本按分号切分，支持单引号/双引号/反引号字符串、`--`、`/* */` 注释；MySQL 下支持 `#` 注释与 `DELIMITER`，PostgreSQL 下支持 `$tag$...$tag$` dollar-quoting 并保留 `#` 运算符。任一语句失败会停止并报告语句序号。执行期间可按 `Esc` 取消。
 
 ## 添加数据源
 
-在侧栏或结果面板按 `a`，或从选项菜单选择“添加数据源”，打开居中的大尺寸连接表单。用 `←`/`→` 选择 PostgreSQL、MySQL 或 SQLite，`↑`/`↓` 或 `Tab` 切换字段，`Enter` 在最后一个字段保存，`Esc` 取消。
+在侧栏或结果面板按 `a`，或从选项菜单选择“添加数据源”，打开居中的大尺寸连接表单。用 `←`/`→` 选择 PostgreSQL、MySQL、SQLite、Redis 或 MongoDB，`↑`/`↓` 或 `Tab` 切换字段，`Enter` 在最后一个字段保存，`Esc` 取消。
 
 - 密码字段以掩码显示；也可以填写 `${ENV_VAR}` 引用环境变量。
 - 保存后会自动建立连接，新数据源立即出现在侧栏。
 - 运行时添加的连接保存在 `$XDG_STATE_HOME/bdb/connections.yaml`（权限 `0600`），启动时与主配置合并；同名连接不会重复添加。
-- 字段会根据类型动态变化：SQLite 只需要名称与路径；MySQL 与 Navicat 一样不需要填写数据库名，连接后可浏览所有数据库，选中表时会生成 `db.table` 形式的查询。
+- 字段会根据类型动态变化：SQLite 只需要名称与路径；MySQL 与 Navicat 一样不需要填写数据库名；Redis 填写地址、密码与数据库编号；MongoDB 填写连接 URI。
 - 表单内容居中展示，label 固定宽度左对齐；当前字段以 `▸` 标记并在底部显示操作提示。
 
 ## 专注布局
@@ -125,22 +134,74 @@ connections:
 ## 鼠标
 
 - 点击侧栏节点：连接、展开节点或打开表操作菜单
+- 表节点：单击只选中，双击直接打开表数据（键盘 `Enter` 仍打开表操作菜单）
 - 点击编辑器或结果面板：切换焦点
 - 点击结果单元格：选中对应单元格
 - 滚轮：在侧栏、结果网格、DDL/索引查看器中滚动
+
+## 侧栏会话状态
+
+侧栏顶部显示当前连接、数据库类型和活动会话数量，并用状态点区分连接状态：
+
+- `●`：当前活动连接
+- `◉`：已打开但当前未显示的会话
+- `○`：尚未连接的配置
+- 连接名、数据库类型按列对齐；表显示 `▦`，视图显示 `◇`
+- PostgreSQL 连接节点展开后会列出所有可连接的数据库；每个数据库（如 `bdb`、`postgres`）是独立会话，展开后显示对应 schema 和表
+- MySQL 直接以数据库作为一级节点；SQLite/MongoDB/Redis 保持原有层级
+- 展开节点使用 `▸` / `▾`，列字段使用 `·`
 
 ## 结果网格
 
 - 字段较多时，`←`/`→` 移动单元格会自动横向滚动；`H`/`L` 直接向左/右翻一屏列，`Home`/`End` 跳到首列/末列
 - 单元格内容超过列宽时仍会截断显示；选中后按 `Enter` 或 `v` 打开完整内容查看器
 - 查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc` 或 `q` 关闭
-- `[`/`]` 调整当前列宽，`o`/`O` 排序，`c` 复制单元格
+- `[`/`]` 调整当前列宽，`o`/`O` 排序，`c` 复制单元格；导出会遵循当前排序
+- 通过「View data」打开的表数据支持服务端分页：`n` 加载下一页，`p` 返回上一页；每页大小取 `query.max_rows`，表有主键时按主键稳定排序
+- 表数据预览会在结果表格下方以一行淡色显示 SQL、总行数、页码、当前页行数和查询时间；空间不足时优先截断 SQL 并保留统计信息
+- 分页查询只在结果面板进行，不会修改编辑器内容；单元格编辑或删除后会刷新当前页，不会跳回第一页
+- 客户端排序（`o`/`O`）只作用于当前页；表数据预览中的 `o`/`O` 会改用数据库 `ORDER BY` 重新查询，排序对所有页生效并回到第一页
+
+## 数据编辑
+
+仅当结果通过「表操作菜单 → View data」打开、且表有主键时启用：
+
+- `e` 编辑当前单元格：输入新值 → 预览 `UPDATE` SQL → `y` 确认执行
+- `x` 删除当前行：预览 `DELETE` SQL → `y` 确认执行
+- 写入在事务中执行，影响行数必须为 1
+- 在分页表数据中编辑或删除后，会重新加载当前页
+- 连接配置 `read_only: true` 时禁止单元格编辑和 SQL 写入语句，并额外拦截：SQL 的 `EXECUTE`、SQLite 的写入型 `PRAGMA`；Redis 中只放行常见只读命令，其余（含 `EVAL`/`FCALL`、`SETBIT`、`SORT ... STORE` 等）一律拒绝；MongoDB 的 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 一律拒绝。这是保守的客户端检查，仍建议使用数据库只读账号或只读副本作为真正的安全边界。
+- 表操作菜单的「Insert row template」会生成 `INSERT` 模板到编辑器
+
+## Redis 与 MongoDB
+
+Redis：
+
+- 侧栏按 db → key 浏览（SCAN，最多 500 个键）
+- 表操作菜单 View data 会按 key 类型生成 `GET` / `HGETALL` / `LRANGE` / `SMEMBERS` / `ZRANGE` / `XRANGE`
+- 编辑器可直接输入 Redis 命令，如 `SCAN 0 COUNT 50`、`GET "my key"`
+
+MongoDB：
+
+- 侧栏按 database → collection 浏览
+- 编辑器查询语法：
+  - `find <db>.<collection> [json]`
+  - `findOne <db>.<collection> [json]`
+  - `aggregate <db>.<collection> [json array]`
+  - `count <db>.<collection> [json]`
+- 表操作菜单 View data 会生成 `find db.collection {}`
+
+## 多会话
+
+每个连接作为独立会话保留编辑器内容、结果网格、补全与编辑缓存。在侧栏切换到另一个配置连接时自动保存当前状态，切回时恢复；断开当前连接不会影响其他会话。
+
+SQL 标签也按连接隔离：每个会话保存自己的标签列表和活动标签，切换连接时一起恢复。标签内容会自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`，应用重启后连接时恢复。
 
 ## 表操作菜单
 
 在侧栏选中表后按 `Enter` 打开：
 
-- **View data**：生成 `SELECT *` 并立即执行
+- **View data**：按 `query.max_rows` 分页浏览表数据，不改动编辑器；结果面板可用 `n`/`p` 翻页
 - **View DDL**：查看建表语句（MySQL 使用 `SHOW CREATE TABLE`，SQLite 读取 `sqlite_master`，PostgreSQL 根据 catalog 生成）
 - **View structure**：列、索引、外键详情
 - **View indexes**：索引列表
@@ -152,19 +213,41 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 编辑器会按当前主题为 SQL 着色：关键字、函数、字符串、数字与注释分别使用不同颜色。支持多行编辑、行号、`Ctrl+Space` 自动补全与查询历史。
 
+编辑器查询不限制返回行数，结果会一次性载入内存；查询大表时请自行加 `LIMIT`。`query.max_rows` 只控制表数据浏览的分页大小。
+
+## 底部状态栏
+
+- 左侧显示当前面板和活动 SQL 标签，例如 `Results │ Query 1`
+- 当前连接、数据库类型和活动会话数显示在左侧栏顶部
+- 右侧显示带图标的状态提示：`✓ Ready`、`… Running`、`✗ error`
+- 表数据分页的页码、行数和耗时显示在结果页脚，状态栏不再重复
+- 最底部一行保留 `Esc`、`F2`、`q`、`?` 等快捷入口
+
+## 多标签与自动保存
+
+- 每个连接拥有独立的 SQL 标签组，切换连接时整套标签一起切换
+- `Ctrl+T` 新建、`Ctrl+W` 关闭、`Ctrl+Tab` / `Ctrl+Shift+Tab` 或 `Alt+←/→` 切换
+- 标签内容、标题和当前活动标签会自动保存到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`（权限 `0600`），重启并连接后恢复
+- 最后一个标签不能关闭，避免编辑器没有可用标签
+
 ## SQL 自动补全
 
 在编辑器中输入标识符时会自动弹出候选，也可按 `Ctrl+Space` 手动触发。候选包括 SQL 关键字、常用函数、当前连接的所有表名，以及已加载的列名；输入 `users.` 时会按需加载该表的列。`↑`/`↓` 选择，`Tab` 或 `Enter` 接受，`Esc` 关闭。
 
 ## 主题
 
-内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或按 `Esc` 打开选项菜单后用 `←`/`→` 切换。运行时选择会写入 `$XDG_STATE_HOME/bdb/theme`，下次启动自动恢复。
+内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或按 `Esc` 打开选项菜单后用 `←`/`→` 切换。运行时选择会写入 `$XDG_STATE_HOME/bdb/theme`，下次启动自动恢复；该状态文件优先于 `ui.theme`，若想改回配置文件中的主题，请先删除此状态文件。
 
 ## 查询历史
 
 成功执行的语句会持久化到 `$XDG_STATE_HOME/bdb/history`（默认 `~/.local/state/bdb/history`），文件权限为 `0600`，最多保留 500 条。编辑器内用 `Ctrl+P` / `Ctrl+N` 浏览。
 
 ## 开发
+
+分支策略：
+
+- `main` 只接受合并，不直接提交
+- 日常开发在 `dev` 分支进行
 
 ```bash
 make test        # 生成 demo.db 并运行全部测试
@@ -182,10 +265,21 @@ mysql -h 127.0.0.1 -ubdb -pbdb bdb
 
 若本地端口已被占用，可用环境变量覆盖：`BDB_PG_PORT=5433 BDB_MYSQL_PORT=3307 docker compose ... up -d`。
 
+性能基准：
+
+```bash
+go test -bench . -benchmem ./internal/ui/results ./internal/ui/editor
+```
+
+静态发布：
+
+```bash
+make release          # 生成 dist/bdb-linux-amd64、arm64 与 checksums.txt
+goreleaser release --clean
+```
+
 ## 路线图
 
-- **P2**：数据编辑（主键定位、事务、SQL 预览与确认）、语法高亮编辑器。
-- **P3**：Redis、MongoDB、多会话。
-- **P4**：性能基准、静态二进制发布。
+P2/P3/P4 已完成：事务化数据编辑、SQL 语法高亮、Redis/MongoDB、多会话、性能基准与静态发布。
 
-已完成：主题系统、SQL 自动补全。
+后续可扩展：SSH 隧道、TLS、Redis/MongoDB 写入、插入行表单、更多导出格式。

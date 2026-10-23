@@ -13,8 +13,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 
-	"github.com/linduan-guan/b-db/internal/db"
-	"github.com/linduan-guan/b-db/internal/db/dialect"
+	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/db/dialect"
 )
 
 func init() {
@@ -104,7 +104,12 @@ func (sqliteDriver) Open(_ context.Context, cfg db.Config) (db.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newConn(cfg.Name, "sqlite", sqlDB, dialect.SQLite{}), nil
+	c := newConn(cfg.Name, "sqlite", sqlDB, dialect.SQLite{})
+	if path == ":memory:" {
+		c.db.SetMaxOpenConns(1)
+		c.db.SetMaxIdleConns(1)
+	}
+	return c, nil
 }
 
 type conn struct {
@@ -134,3 +139,5 @@ func (c *conn) Capabilities() db.Capability { return db.CapQuery | db.CapCatalog
 func (c *conn) Catalog() db.Catalog { return catalog{c: c} }
 
 func (c *conn) Querier() db.Querier { return querier{c: c} }
+
+func (c *conn) Mutator() db.Mutator { return mutator{c: c} }

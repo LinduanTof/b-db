@@ -156,3 +156,52 @@ connections: []
 		t.Fatalf("timeout = %s, want 2m0s", got)
 	}
 }
+
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	path := writeConfig(t, `
+connections: []
+unknown_option: true
+`)
+	if _, _, err := Load(path); err == nil {
+		t.Fatal("expected unknown field error")
+	}
+}
+
+func TestExpandConnection(t *testing.T) {
+	t.Setenv("BDB_EXPAND_PASSWORD", "secret")
+	conn, err := ExpandConnection(Connection{
+		Name:     "pg",
+		Type:     TypePostgres,
+		Host:     "localhost",
+		User:     "postgres",
+		Password: "${BDB_EXPAND_PASSWORD}",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.Password != "secret" {
+		t.Fatalf("password = %q", conn.Password)
+	}
+}
+
+func TestExpandConnectionMissingEnv(t *testing.T) {
+	os.Unsetenv("BDB_MISSING_EXPAND")
+	_, err := ExpandConnection(Connection{Name: "pg", Type: TypePostgres, Password: "${BDB_MISSING_EXPAND}"})
+	if err == nil || !strings.Contains(err.Error(), "BDB_MISSING_EXPAND") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestEffectivePort(t *testing.T) {
+	cases := map[string]int{
+		TypePostgres: 5432,
+		TypeMySQL:    3306,
+		TypeMongo:    27017,
+		TypeRedis:    6379,
+	}
+	for typ, want := range cases {
+		if got := (Connection{Type: typ}).EffectivePort(); got != want {
+			t.Errorf("EffectivePort(%s) = %d, want %d", typ, got, want)
+		}
+	}
+}
