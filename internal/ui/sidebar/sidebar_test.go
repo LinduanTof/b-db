@@ -56,6 +56,15 @@ func TestConnectionIconsAndAlignment(t *testing.T) {
 	}
 }
 
+func TestNoConnectionsShowsConfigPath(t *testing.T) {
+	m := New(nil, i18n.New("en"))
+	m.SetSize(80, 10)
+	m.SetConfigPath("/tmp/bdb/config.yaml")
+	if view := m.View(); !strings.Contains(view, "/tmp/bdb/config.yaml") {
+		t.Fatalf("view:\n%s", view)
+	}
+}
+
 func TestHandleClickOutOfRange(t *testing.T) {
 	m := New(nil, i18n.New("en"))
 	m.SetSize(30, 10)

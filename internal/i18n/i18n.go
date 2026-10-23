@@ -210,7 +210,7 @@ var en = map[string]string{
 
 	KeyResultsPrompt:    "Run a query to see results",
 	KeyTerminalTooSmall: "Terminal too small — resize to at least 40x10",
-	KeyNoConnections:    "No connections configured; edit ~/.config/bdb/config.yaml",
+	KeyNoConnections:    "No connections configured; edit %s or press a to add one",
 
 	KeyObjectTable:  "table",
 	KeyObjectView:   "view",
@@ -372,7 +372,7 @@ var zh = map[string]string{
 
 	KeyResultsPrompt:    "执行查询后在这里查看结果",
 	KeyTerminalTooSmall: "终端窗口过小，请调整到至少 40x10",
-	KeyNoConnections:    "尚未配置连接，请编辑 ~/.config/bdb/config.yaml",
+	KeyNoConnections:    "尚未配置连接，请编辑 %s 或按 a 添加",
 
 	KeyObjectTable:  "表",
 	KeyObjectView:   "视图",

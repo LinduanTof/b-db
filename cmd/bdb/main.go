@@ -37,7 +37,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	cfg, warnings, err := config.Load(configPath)
+	cfgPath := config.ResolvePath(configPath)
+	if created, err := config.EnsureFile(cfgPath); err != nil {
+		fmt.Fprintf(os.Stderr, "bdb: warning: could not create default config: %v\n", err)
+	} else if created {
+		fmt.Fprintf(os.Stderr, "bdb: created default config %s\n", cfgPath)
+	}
+
+	cfg, warnings, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bdb: %v\n", err)
 		os.Exit(1)

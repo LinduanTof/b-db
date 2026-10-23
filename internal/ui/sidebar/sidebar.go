@@ -83,6 +83,8 @@ type Model struct {
 
 	conn     db.Conn
 	connName string
+
+	configPath string
 }
 
 func New(connections []config.Connection, t *i18n.Translator) Model {
@@ -102,6 +104,10 @@ func New(connections []config.Connection, t *i18n.Translator) Model {
 
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
+}
+
+func (m *Model) SetConfigPath(path string) {
+	m.configPath = path
 }
 
 func (m *Model) SetConn(conn db.Conn) tea.Cmd {
@@ -375,7 +381,7 @@ func (m *Model) View() string {
 		return ""
 	}
 	if len(m.flat) == 0 {
-		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoConnections)), m.width, m.height)
+		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoConnections, m.configPath)), m.width, m.height)
 	}
 	if m.cursor < m.offset {
 		m.offset = m.cursor

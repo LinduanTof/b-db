@@ -53,6 +53,8 @@ type Config struct {
 	UI                UIConfig     `yaml:"ui"`
 	Query             QueryConfig  `yaml:"query"`
 	Connections       []Connection `yaml:"connections"`
+
+	Path string `yaml:"-"`
 }
 
 type UIConfig struct {
@@ -100,11 +102,77 @@ func DefaultPath() string {
 	return filepath.Join(home, ".config", "bdb", "config.yaml")
 }
 
+const defaultConfigTemplate = `# bdb configuration
+# Add connections here, or press "a" inside bdb to add one.
+
+default_connection: ""
+
+ui:
+  language: auto
+  theme: default
+  focus_mode: manual
+
+query:
+  timeout: 30s
+  max_rows: 1000
+
+connections: []
+
+# Examples:
+# - name: local-sqlite
+#   type: sqlite
+#   path: ./data.db
+# - name: local-pg
+#   type: postgres
+#   host: 127.0.0.1
+#   port: 5432
+#   user: postgres
+#   password: ${PG_PASSWORD}
+#   database: postgres
+#   sslmode: disable
+# - name: cache
+#   type: redis
+#   addr: 127.0.0.1:6379
+# - name: docs
+#   type: mongo
+#   uri: mongodb://127.0.0.1:27017
+`
+
+func ResolvePath(path string) string {
+	if path != "" {
+		return path
+	}
+	return DefaultPath()
+}
+
+func EnsureFile(path string) (bool, error) {
+	path = ResolvePath(path)
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return false, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer file.Close()
+	if _, err := file.WriteString(defaultConfigTemplate); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func Load(path string) (*Config, []string, error) {
 	cfg := Defaults()
-	if path == "" {
-		path = DefaultPath()
-	}
+	path = ResolvePath(path)
+	cfg.Path = path
 
 	var warnings []string
 	data, err := os.ReadFile(path)

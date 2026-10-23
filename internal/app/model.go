@@ -223,6 +223,7 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 		m.setStatus(t.T(i18n.KeyErrorLoadConnections, err), true)
 	}
 	m.sidebar = sidebar.New(cfg.Connections, t)
+	m.sidebar.SetConfigPath(cfg.Path)
 	m.editor = editor.New(t)
 	m.results = results.New(t)
 	m.options = menu.New(t)
