@@ -57,6 +57,12 @@ type queryDoneMsg struct {
 	outcome query.Outcome
 }
 
+type tablePageDoneMsg struct {
+	id      uint64
+	outcome query.Outcome
+	page    *pagination
+}
+
 type editInfo struct {
 	columns []db.Column
 	primary []string
@@ -161,11 +167,10 @@ type Model struct {
 	cellEdit   celledit.Model
 	confirm    confirm.Model
 
-	pendingCmd      tea.Cmd
-	pendingSource   *db.TableRef
-	pendingSourceID uint64
-	editCache       map[string]editInfo
-	editTarget      editTarget
+	pendingCmd tea.Cmd
+	pager      *pagination
+	editCache  map[string]editInfo
+	editTarget editTarget
 
 	tableMenuSchema string
 	tableMenuTable  string
@@ -212,6 +217,7 @@ type session struct {
 	completer    *ac.Engine
 	tableSchemas map[string]string
 	editCache    map[string]editInfo
+	pager        *pagination
 }
 
 func New(cfg *config.Config, t *i18n.Translator) *Model {
@@ -370,8 +376,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connOpenedMsg:
 		return m, m.handleConnOpened(msg)
 	case queryDoneMsg:
-		m.handleQueryDone(msg)
-		return m, nil
+		return m, m.handleQueryDone(msg)
+	case tablePageDoneMsg:
+		return m, m.handleTablePageDone(msg)
 	case celledit.SubmittedMsg:
 		return m, m.openUpdateConfirm(msg.Value)
 	case confirm.ConfirmedMsg:
@@ -670,6 +677,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	case focusResults:
 		switch key {
+		case "n":
+			return m.nextPage()
+		case "p":
+			return m.previousPage()
 		case "ctrl+e":
 			return m.exportCmd("csv")
 		case "ctrl+j":
@@ -783,6 +794,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	}
 	m.editCache = map[string]editInfo{}
 	m.editTarget = editTarget{}
+	m.pager = nil
 	m.setStatus(m.t.T(i18n.KeyStatusConnected, msg.name), false)
 	m.completer.Reset()
 	m.tableSchemas = map[string]string{}
@@ -798,15 +810,21 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 }
 
 func (m *Model) runQuery() tea.Cmd {
-	return m.runQueryWithSource(nil)
-}
-
-func (m *Model) runQueryWithSource(source *db.TableRef) tea.Cmd {
 	stmt := strings.TrimSpace(m.editor.Value())
 	if stmt == "" {
 		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
 		return nil
 	}
+	return m.runStatement(stmt, true, 0)
+}
+
+func (m *Model) runTableCommand(stmt string) tea.Cmd {
+	return m.runStatement(stmt, false, max(1, m.cfg.Query.MaxRows))
+}
+
+// runStatement uses a zero maxRows for an unlimited editor query. Table
+// browsing passes query.max_rows explicitly.
+func (m *Model) runStatement(stmt string, recordHistory bool, maxRows int) tea.Cmd {
 	if m.conn == nil {
 		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
 		return nil
@@ -821,23 +839,21 @@ func (m *Model) runQueryWithSource(source *db.TableRef) tea.Cmd {
 	}
 	m.querySeq++
 	id := m.querySeq
-	m.pendingSource = nil
-	m.pendingSourceID = 0
-	if source != nil {
-		m.pendingSource = source
-		m.pendingSourceID = id
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.Query.Timeout.Std())
 	m.cancel = cancel
 	m.running = true
-	m.editor.AddHistory(stmt)
-	store := m.history
-	if store != nil {
-		store.Add(stmt)
+	var store *history.Store
+	if recordHistory {
+		m.editor.AddHistory(stmt)
+		store = m.history
+		if store != nil {
+			store.Add(stmt)
+		}
 	}
 	m.setStatus(m.t.T(i18n.KeyStatusRunning), false)
 
 	executor := m.executor
+	executor.MaxRows = maxRows
 	return func() tea.Msg {
 		outcome := executor.Run(ctx, stmt)
 		cancel()
@@ -857,14 +873,53 @@ func (m *Model) cancelQuery() {
 	m.setStatus(m.t.T(i18n.KeyStatusCancelled), false)
 }
 
-func (m *Model) handleQueryDone(msg queryDoneMsg) {
+func (m *Model) handleQueryDone(msg queryDoneMsg) tea.Cmd {
 	if msg.id != m.querySeq {
-		return
+		return nil
 	}
-	defer func() {
-		m.pendingSource = nil
-		m.pendingSourceID = 0
-	}()
+	m.running = false
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+
+	out := msg.outcome
+	if out.Err != nil {
+		switch {
+		case errors.Is(out.Err, context.Canceled):
+			m.setStatus(m.t.T(i18n.KeyStatusCancelled), false)
+		case errors.Is(out.Err, context.DeadlineExceeded):
+			m.setStatus(m.t.T(i18n.KeyStatusTimeout), true)
+		default:
+			m.pager = nil
+			m.setStatus(m.t.T(i18n.KeyErrorQuery, out.Err), true)
+			m.results.SetError(out.Err.Error())
+		}
+		return nil
+	}
+
+	switch {
+	case out.Result != nil:
+		m.pager = nil
+		m.results.SetResult(out.Result)
+		duration := humanDuration(out.Result.Elapsed)
+		if out.Result.Truncated {
+			m.setStatus(m.t.T(i18n.KeyStatusRowsTruncated, len(out.Result.Rows), duration), false)
+		} else {
+			m.setStatus(m.t.T(i18n.KeyStatusRows, len(out.Result.Rows), duration), false)
+		}
+	case out.Exec != nil:
+		m.pager = nil
+		m.results.SetExec(out.Exec.Affected, out.Exec.Elapsed)
+		m.setStatus(m.t.T(i18n.KeyStatusAffected, out.Exec.Affected, humanDuration(out.Exec.Elapsed)), false)
+	}
+	return nil
+}
+
+func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
+	if msg.id != m.querySeq || msg.page == nil {
+		return nil
+	}
 	m.running = false
 	if m.cancel != nil {
 		m.cancel()
@@ -880,27 +935,40 @@ func (m *Model) handleQueryDone(msg queryDoneMsg) {
 			m.setStatus(m.t.T(i18n.KeyStatusTimeout), true)
 		default:
 			m.setStatus(m.t.T(i18n.KeyErrorQuery, out.Err), true)
-			m.results.SetError(out.Err.Error())
 		}
-		return
+		return nil
+	}
+	if out.Result == nil {
+		return nil
 	}
 
-	switch {
-	case out.Result != nil:
-		m.results.SetResult(out.Result)
-		if m.pendingSource != nil && m.pendingSourceID == msg.id {
-			m.results.SetSource(m.pendingSource.Schema, m.pendingSource.Name)
+	page := msg.page
+	if page.offset > 0 && len(out.Result.Rows) == 0 {
+		if page.refresh {
+			previous := *page
+			previous.offset -= previous.size
+			if previous.offset < 0 {
+				previous.offset = 0
+			}
+			previous.refresh = true
+			return m.runPageQuery(&previous)
 		}
-		duration := humanDuration(out.Result.Elapsed)
-		if out.Result.Truncated {
-			m.setStatus(m.t.T(i18n.KeyStatusRowsTruncated, len(out.Result.Rows), duration), false)
-		} else {
-			m.setStatus(m.t.T(i18n.KeyStatusRows, len(out.Result.Rows), duration), false)
+		if m.pager != nil {
+			m.pager.atEnd = true
 		}
-	case out.Exec != nil:
-		m.results.SetExec(out.Exec.Affected, out.Exec.Elapsed)
-		m.setStatus(m.t.T(i18n.KeyStatusAffected, out.Exec.Affected, humanDuration(out.Exec.Elapsed)), false)
+		m.setStatus(m.t.T(i18n.KeyStatusNoMoreRows), false)
+		return nil
 	}
+
+	m.results.SetResult(out.Result)
+	m.results.SetSource(page.schema, page.table)
+	page.atEnd = len(out.Result.Rows) < page.size
+	page.refresh = false
+	m.pager = page
+	size := max(1, page.size)
+	pageNumber := page.offset/size + 1
+	m.setStatus(m.t.T(i18n.KeyStatusPage, pageNumber, len(out.Result.Rows), humanDuration(out.Result.Elapsed)), false)
+	return nil
 }
 
 func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
@@ -927,10 +995,9 @@ func mongoCommand(schema, table string) string {
 }
 
 func (m *Model) mongoTableData(schema, table string) tea.Cmd {
-	m.editor.SetValue(mongoCommand(schema, table))
 	m.focus = focusResults
 	m.layout()
-	return m.runQuery()
+	return m.runTableCommand(mongoCommand(schema, table))
 }
 
 func redisCommand(kind, key string) string {
@@ -958,10 +1025,9 @@ func quoteRedisArg(value string) string {
 }
 
 func (m *Model) redisTableData(schema, table, kind string) tea.Cmd {
-	m.editor.SetValue(redisCommand(kind, table))
 	m.focus = focusResults
 	m.layout()
-	return m.runQuery()
+	return m.runTableCommand(redisCommand(kind, table))
 }
 
 func qualifiedTable(schema, table string) string {
@@ -980,12 +1046,13 @@ func (m *Model) selectTableStmt(schema, table string) string {
 }
 
 func (m *Model) tableData(schema, table string) tea.Cmd {
-	m.editor.SetValue(m.selectTableStmt(schema, table))
-	m.focus = focusEditor
+	m.focus = focusResults
 	m.layout()
-	focus := m.editor.Focus()
-	run := m.runQueryWithSource(&db.TableRef{Schema: schema, Name: table})
-	return tea.Batch(focus, run)
+	return m.runPageQuery(&pagination{
+		schema: schema,
+		table:  table,
+		size:   max(1, m.cfg.Query.MaxRows),
+	})
 }
 
 func (m *Model) tableMenuItems() []menu.Item {
@@ -1209,6 +1276,7 @@ func (m *Model) disconnect() {
 	m.completer.Reset()
 	m.tableSchemas = map[string]string{}
 	m.editCache = map[string]editInfo{}
+	m.pager = nil
 	m.sidebar.ClearConn()
 	m.results.Clear()
 	m.setStatus(m.t.T(i18n.KeyStatusDisconnected), false)
@@ -1248,6 +1316,7 @@ func (m *Model) saveCurrentSession() {
 		completer:    m.completer,
 		tableSchemas: m.tableSchemas,
 		editCache:    m.editCache,
+		pager:        m.pager,
 	}
 }
 
@@ -1259,12 +1328,12 @@ func (m *Model) activateSession(name string, saved *session) {
 	m.completer = saved.completer
 	m.tableSchemas = saved.tableSchemas
 	m.editCache = saved.editCache
+	m.pager = saved.pager
 	m.executor = query.Executor{
 		Conn:        saved.conn,
 		MaxRows:     m.cfg.Query.MaxRows,
 		AlwaysQuery: saved.conn.Type() == "redis" || saved.conn.Type() == "mongo",
 	}
-	m.pendingSource = nil
 	m.pendingCmd = nil
 	m.running = false
 	m.querySeq++
@@ -1278,13 +1347,13 @@ func (m *Model) resetSession() {
 	m.conn = nil
 	m.connName = ""
 	m.running = false
-	m.pendingSource = nil
 	m.pendingCmd = nil
 	m.editor = editor.New(m.t)
 	m.results = results.New(m.t)
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
 	m.editCache = map[string]editInfo{}
+	m.pager = nil
 	if m.history != nil {
 		m.editor.SetHistory(m.history.Entries())
 	}
@@ -1421,6 +1490,8 @@ func (m *Model) runScriptCmd(path string) tea.Cmd {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	m.querySeq++
+	m.pager = nil
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	m.cancel = cancel
 	m.running = true

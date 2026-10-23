@@ -22,6 +22,10 @@ const (
 	KeyStatusExported      = "status.exported"
 	KeyStatusNoResults     = "status.no_results"
 	KeyStatusLoading       = "status.loading"
+	KeyStatusPage          = "status.page"
+	KeyStatusNoMoreRows    = "status.no_more_rows"
+	KeyStatusFirstPage     = "status.first_page"
+	KeyStatusNoPagination  = "status.no_pagination"
 
 	KeyHintSidebar        = "hint.sidebar"
 	KeyHintEditor         = "hint.editor"

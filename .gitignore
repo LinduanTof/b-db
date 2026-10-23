@@ -2,3 +2,5 @@
 /dist/
 /bdb-export-*
 /testdata/demo.db
+
+.idea

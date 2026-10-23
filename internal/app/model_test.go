@@ -72,7 +72,7 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			return m
 		}
 		switch msg.(type) {
-		case connOpenedMsg, queryDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
+		case connOpenedMsg, queryDoneMsg, tablePageDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			editInfoMsg, mutationDoneMsg, celledit.SubmittedMsg, confirm.ConfirmedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
@@ -511,6 +511,7 @@ func TestTableDataAction(t *testing.T) {
 			m.conn.Close()
 		}
 	}()
+	m.editor.SetValue("SELECT 42;")
 
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -524,8 +525,11 @@ func TestTableDataAction(t *testing.T) {
 	if rs == nil || len(rs.Rows) != 5 {
 		t.Fatalf("result = %#v, status=%s", rs, m.status)
 	}
-	if !strings.Contains(m.editor.Value(), "users") {
-		t.Fatalf("editor = %q", m.editor.Value())
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
+	}
+	if got := m.editor.Value(); got != "SELECT 42;" {
+		t.Fatalf("table data must not modify the editor, got %q", got)
 	}
 }
 
@@ -904,6 +908,9 @@ func TestSessionSwitching(t *testing.T) {
 	if m.results.Result() == nil {
 		t.Fatal("results should be restored with the session")
 	}
+	if m.pager == nil || m.pager.schema != "main" || m.pager.table != "users" {
+		t.Fatalf("pager should be restored with the session: %#v", m.pager)
+	}
 }
 
 func TestSessionSwitchCancelsMutation(t *testing.T) {
@@ -1020,6 +1027,33 @@ func TestQueryFlow(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "5 row(s)") {
 		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestEditorQueryIgnoresMaxRows(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.cfg.Query.MaxRows = 2
+
+	m.editor.SetValue("SELECT * FROM users ORDER BY id;")
+	m.focus = focusEditor
+	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	m = runCmd(t, model.(*Model), cmd)
+
+	rs := m.results.Result()
+	if rs == nil || len(rs.Rows) != 5 || rs.Truncated {
+		t.Fatalf("editor query result = %#v, status=%s", rs, m.status)
+	}
+	if !strings.Contains(m.status, "5 row(s)") || strings.Contains(m.status, "truncated") {
+		t.Fatalf("status = %q", m.status)
+	}
+	if m.pager != nil {
+		t.Fatalf("editor query must not create a table pager: %#v", m.pager)
 	}
 }
 

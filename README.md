@@ -28,7 +28,7 @@ ui:
   focus_mode: manual      # manual | auto
 query:
   timeout: 30s
-  max_rows: 1000
+  max_rows: 1000          # 表数据浏览每页行数；编辑器查询不限制
 connections:
   - name: local
     type: sqlite
@@ -74,6 +74,7 @@ connections:
 | 编辑器 | `Ctrl+P` / `Ctrl+N` | 查询历史 |
 | 编辑器 | `Esc` | 取消正在执行的查询 |
 | 结果 | 方向键 / `hjkl` | 移动单元格 |
+| 结果 | `n` / `p` | 下一页 / 上一页（表数据分页） |
 | 结果 | `PgUp` / `PgDn` | 翻页 |
 | 结果 | `g` / `G` | 首行 / 末行 |
 | 结果 | `H` / `L` | 向左 / 向右翻一屏列 |
@@ -93,7 +94,7 @@ connections:
 
 - `↑`/`↓` 移动选项，`←`/`→` 调整设置值，`Enter` 执行操作，`Esc` 关闭
 - 操作：添加数据源、断开连接、导出 CSV/JSON/Markdown、帮助、退出
-- 设置：主题、界面语言、查询超时、结果最大行数，修改即时生效
+- 设置：主题、界面语言、查询超时、表数据每页行数，修改即时生效
 - 底部菜单栏常驻显示 `Esc 菜单`、`q 退出`、`? 帮助`
 
 菜单打开时按 `q` 可直接退出。
@@ -139,6 +140,9 @@ connections:
 - 单元格内容超过列宽时仍会截断显示；选中后按 `Enter` 或 `v` 打开完整内容查看器
 - 查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc` 或 `q` 关闭
 - `[`/`]` 调整当前列宽，`o`/`O` 排序，`c` 复制单元格；导出会遵循当前排序
+- 通过「View data」打开的表数据支持服务端分页：`n` 加载下一页，`p` 返回上一页；每页大小取 `query.max_rows`，表有主键时按主键稳定排序
+- 分页查询只在结果面板进行，不会修改编辑器内容；单元格编辑或删除后会刷新当前页，不会跳回第一页
+- 客户端排序（`o`/`O`）只作用于当前页；翻页后按数据库顺序重新加载
 
 ## 数据编辑
 
@@ -147,6 +151,7 @@ connections:
 - `e` 编辑当前单元格：输入新值 → 预览 `UPDATE` SQL → `y` 确认执行
 - `x` 删除当前行：预览 `DELETE` SQL → `y` 确认执行
 - 写入在事务中执行，影响行数必须为 1
+- 在分页表数据中编辑或删除后，会重新加载当前页
 - 连接配置 `read_only: true` 时禁止单元格编辑和 SQL 写入语句，并额外拦截：SQL 的 `EXECUTE`、SQLite 的写入型 `PRAGMA`；Redis 中只放行常见只读命令，其余（含 `EVAL`/`FCALL`、`SETBIT`、`SORT ... STORE` 等）一律拒绝；MongoDB 的 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 一律拒绝。这是保守的客户端检查，仍建议使用数据库只读账号或只读副本作为真正的安全边界。
 - 表操作菜单的「Insert row template」会生成 `INSERT` 模板到编辑器
 
@@ -176,7 +181,7 @@ MongoDB：
 
 在侧栏选中表后按 `Enter` 打开：
 
-- **View data**：生成带 `query.max_rows` 限制的 `SELECT *` 并立即执行
+- **View data**：按 `query.max_rows` 分页浏览表数据，不改动编辑器；结果面板可用 `n`/`p` 翻页
 - **View DDL**：查看建表语句（MySQL 使用 `SHOW CREATE TABLE`，SQLite 读取 `sqlite_master`，PostgreSQL 根据 catalog 生成）
 - **View structure**：列、索引、外键详情
 - **View indexes**：索引列表
@@ -187,6 +192,8 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 ## SQL 编辑器
 
 编辑器会按当前主题为 SQL 着色：关键字、函数、字符串、数字与注释分别使用不同颜色。支持多行编辑、行号、`Ctrl+Space` 自动补全与查询历史。
+
+编辑器查询不限制返回行数，结果会一次性载入内存；查询大表时请自行加 `LIMIT`。`query.max_rows` 只控制表数据浏览的分页大小。
 
 ## SQL 自动补全
 

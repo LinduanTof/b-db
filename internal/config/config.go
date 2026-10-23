@@ -115,7 +115,7 @@ ui:
 
 query:
   timeout: 30s
-  max_rows: 1000
+  max_rows: 1000   # table browsing page size; editor queries are unlimited
 
 connections: []
 

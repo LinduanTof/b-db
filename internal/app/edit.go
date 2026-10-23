@@ -243,9 +243,16 @@ func (m *Model) refreshSource() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	stmt := m.selectTableStmt(schema, table)
-	m.editor.SetValue(stmt)
-	return m.runQueryWithSource(&db.TableRef{Schema: schema, Name: table})
+	if m.pager != nil && m.pager.schema == schema && m.pager.table == table {
+		page := *m.pager
+		page.refresh = true
+		return m.runPageQuery(&page)
+	}
+	return m.runPageQuery(&pagination{
+		schema: schema,
+		table:  table,
+		size:   max(1, m.cfg.Query.MaxRows),
+	})
 }
 
 func (m *Model) insertTemplate(schema, table string, columns []db.Column) tea.Cmd {
