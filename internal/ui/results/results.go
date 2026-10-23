@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	rowNumWidth = 5
 	minColWidth = 4
 	maxColWidth = 40
 	cellPadding = 2
@@ -40,6 +39,7 @@ type Model struct {
 
 	sourceSchema string
 	sourceTable  string
+	querySQL     string
 
 	order   []int
 	sortCol int
@@ -57,6 +57,7 @@ func (m *Model) SetSize(width, height int) {
 func (m *Model) SetResult(rs *db.ResultSet) {
 	m.rs = rs
 	m.sourceSchema, m.sourceTable = "", ""
+	m.querySQL = ""
 	m.errText = ""
 	m.affected = nil
 	m.elapsed = rs.Elapsed
@@ -85,6 +86,7 @@ func (m *Model) SetExec(affected int64, elapsed time.Duration) {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
+	m.querySQL = ""
 	m.errText = ""
 	m.affected = &affected
 	m.elapsed = elapsed
@@ -94,8 +96,13 @@ func (m *Model) SetError(text string) {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
+	m.querySQL = ""
 	m.affected = nil
 	m.errText = text
+}
+
+func (m *Model) SetQuerySQL(sql string) {
+	m.querySQL = sql
 }
 
 func (m *Model) Result() *db.ResultSet { return m.rs }
@@ -121,6 +128,7 @@ func (m *Model) Clear() {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
+	m.querySQL = ""
 	m.affected = nil
 	m.errText = ""
 	m.cursorRow, m.cursorCol = 0, 0
@@ -360,6 +368,23 @@ func (m *Model) SetSource(schema, table string) {
 	m.sourceSchema, m.sourceTable = schema, table
 }
 
+func (m *Model) SetSort(col int, asc bool) {
+	m.sortCol = col
+	m.sortAsc = asc
+}
+
+func (m Model) ColumnIndex(name string) int {
+	if m.rs == nil {
+		return -1
+	}
+	for i, col := range m.rs.Columns {
+		if col.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m Model) Source() (schema, table string, ok bool) {
 	if m.sourceTable == "" {
 		return "", "", false
@@ -442,12 +467,7 @@ func (m *Model) HandleClick(x, y int) bool {
 	if row < 0 || row >= len(m.cells) {
 		return false
 	}
-	if x >= 1 && x < 1+rowNumWidth {
-		m.cursorRow = row
-		m.ensureVisible()
-		return true
-	}
-	cursorX := 1 + rowNumWidth + 1
+	cursorX := 1
 	for _, col := range m.columnLayout() {
 		if x >= cursorX && x < cursorX+col.width {
 			m.cursorCol = col.index
@@ -492,7 +512,11 @@ func (m *Model) ensureVisible() {
 }
 
 func (m *Model) bodyRows() int {
-	return max(0, m.height-4)
+	height := m.height
+	if m.querySQL != "" {
+		height--
+	}
+	return max(0, height-4)
 }
 
 type column struct {
@@ -505,7 +529,7 @@ func (m *Model) columnLayout() []column {
 		return nil
 	}
 	start := min(max(m.scrollCol, 0), len(m.widths)-1)
-	used := 1 + rowNumWidth + 1
+	used := 1
 	out := make([]column, 0, len(m.widths)-start)
 	for c := start; c < len(m.widths); c++ {
 		avail := m.width - used - 1
@@ -519,7 +543,7 @@ func (m *Model) columnLayout() []column {
 	if len(out) == 0 {
 		w := max(1, m.width-used-1)
 		out = append(out, column{index: start, width: w})
-		used = 1 + rowNumWidth + 1 + w + 1
+		used = 1 + w + 1
 	}
 	if remainder := m.width - used; remainder > 0 {
 		out[len(out)-1].width += remainder
@@ -549,8 +573,18 @@ func (m *Model) View() string {
 	if m.rs == nil {
 		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyResultsPrompt)), m.width, m.height)
 	}
-	if m.height < 4 {
-		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoRows)), m.width, m.height)
+	gridHeight := m.height
+	footer := ""
+	if m.querySQL != "" {
+		gridHeight--
+		footer = m.renderQuerySQL()
+	}
+	if gridHeight < 4 {
+		content := theme.Muted.Render(m.t.T(i18n.KeyNoRows))
+		if footer != "" {
+			content += "\n" + footer
+		}
+		return textutil.FitLines(content, m.width, m.height)
 	}
 
 	m.ensureVisible()
@@ -565,15 +599,23 @@ func (m *Model) View() string {
 			lines = append(lines, m.messageRow(m.t.T(i18n.KeyNoRows)))
 		}
 	} else {
-		for r := m.scrollRow; r < len(m.cells) && len(lines) < m.height-1; r++ {
+		for r := m.scrollRow; r < len(m.cells) && len(lines) < gridHeight-1; r++ {
 			lines = append(lines, m.renderRow(layout, r, r == m.cursorRow))
 		}
 	}
-	for len(lines) < m.height-1 {
+	for len(lines) < gridHeight-1 {
 		lines = append(lines, m.emptyRow(layout))
 	}
 	lines = append(lines, m.borderLine(layout, borderBottom))
+	if footer != "" {
+		lines = append(lines, footer)
+	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderQuerySQL() string {
+	label := theme.Header.Render(" " + m.t.T(i18n.KeyResultsSQL) + " ")
+	return textutil.FitLine(label+theme.Muted.Render(m.querySQL), m.width)
 }
 
 type borderKind int
@@ -595,19 +637,16 @@ func (m *Model) borderLine(layout []column, kind borderKind) string {
 
 	var b strings.Builder
 	b.WriteString(left)
-	b.WriteString(strings.Repeat("─", rowNumWidth))
+	for i, col := range layout {
+		b.WriteString(strings.Repeat("─", col.width))
+		if i == len(layout)-1 {
+			b.WriteString(right)
+		} else {
+			b.WriteString(join)
+		}
+	}
 	if len(layout) == 0 {
 		b.WriteString(right)
-	} else {
-		b.WriteString(join)
-		for i, col := range layout {
-			b.WriteString(strings.Repeat("─", col.width))
-			if i == len(layout)-1 {
-				b.WriteString(right)
-			} else {
-				b.WriteString(join)
-			}
-		}
 	}
 	return theme.Muted.Render(textutil.FitLine(b.String(), m.width))
 }
@@ -620,8 +659,6 @@ func (m *Model) messageRow(text string) string {
 func (m *Model) emptyRow(layout []column) string {
 	var b strings.Builder
 	b.WriteString("│")
-	b.WriteString(strings.Repeat(" ", rowNumWidth))
-	b.WriteString("│")
 	for _, col := range layout {
 		b.WriteString(strings.Repeat(" ", col.width))
 		b.WriteString("│")
@@ -632,15 +669,13 @@ func (m *Model) emptyRow(layout []column) string {
 func (m *Model) renderHeader(layout []column) string {
 	var b strings.Builder
 	b.WriteString("│")
-	b.WriteString(theme.Header.Render(textutil.FitLine("#", rowNumWidth)))
-	b.WriteString("│")
 	for _, col := range layout {
 		name := m.rs.Columns[col.index].Name
 		if col.index == m.sortCol && m.sortCol >= 0 {
 			if m.sortAsc {
-				name += " ↑"
+				name += "↑"
 			} else {
-				name += " ↓"
+				name += "↓"
 			}
 		}
 		b.WriteString(theme.Header.Render(textutil.FitLine(" "+name, col.width)))
@@ -659,14 +694,7 @@ func (m *Model) renderRow(layout []column, r int, selected bool) string {
 	}
 	row := m.cells[actual]
 
-	rowNumStyle := lipgloss.NewStyle()
-	if selected {
-		rowNumStyle = theme.Selected
-	}
-
 	var b strings.Builder
-	b.WriteString("│")
-	b.WriteString(rowNumStyle.Render(fmt.Sprintf("%*d", rowNumWidth, actual+1)))
 	b.WriteString("│")
 	for _, col := range layout {
 		text := ""

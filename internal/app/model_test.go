@@ -76,7 +76,7 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			editInfoMsg, mutationDoneMsg, celledit.SubmittedMsg, confirm.ConfirmedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
-			sidebar.ConnectMsg, sidebar.SelectTableMsg, sidebar.TableMenuMsg,
+			sidebar.ConnectMsg, sidebar.SelectTableMsg, sidebar.TableMenuMsg, sidebar.TableOpenMsg,
 			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg:
 		default:
 			return m
@@ -480,6 +480,9 @@ func TestAddConnectionSavesCurrentSession(t *testing.T) {
 	if m.editor.Value() != "" || m.results.Result() != nil {
 		t.Fatalf("new session should start clean: editor=%q results=%#v", m.editor.Value(), m.results.Result())
 	}
+	if view := ansi.Strip(m.sidebar.View()); !strings.Contains(view, "2 active") {
+		t.Fatalf("sidebar should show two active sessions:\n%s", view)
+	}
 
 	saved, ok := m.sessions["local-sqlite"]
 	if !ok {
@@ -588,6 +591,26 @@ func TestTableDataAction(t *testing.T) {
 	}
 }
 
+func TestSidebarDoubleClickOpensTableData(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	model, cmd := m.Update(sidebar.TableOpenMsg{Schema: "main", Table: "users", Kind: "table"})
+	m = runCmd(t, model.(*Model), cmd)
+	rs := m.results.Result()
+	if rs == nil || len(rs.Rows) != 5 {
+		t.Fatalf("result = %#v, status=%s", rs, m.status)
+	}
+	if m.focus != focusResults || m.pager == nil {
+		t.Fatalf("focus=%v pager=%#v", m.focus, m.pager)
+	}
+}
+
 func TestTableIndexesAction(t *testing.T) {
 	m := testModel(t, "en")
 	m = connect(t, m)
@@ -617,7 +640,7 @@ func TestTableIndexesAction(t *testing.T) {
 
 func TestMouseClickSidebar(t *testing.T) {
 	m := testModel(t, "en")
-	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 1, Button: tea.MouseLeft})
+	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 2, Button: tea.MouseLeft})
 	m = runCmd(t, model.(*Model), cmd)
 	if m.conn == nil {
 		t.Fatalf("click should connect, status=%s", m.status)
@@ -625,6 +648,37 @@ func TestMouseClickSidebar(t *testing.T) {
 	defer m.conn.Close()
 	if m.focus != focusSidebar {
 		t.Fatalf("focus = %v, want sidebar", m.focus)
+	}
+}
+
+func TestMouseDoubleClickOpensTable(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 3, Button: tea.MouseLeft})
+	m = runCmd(t, model.(*Model), cmd)
+	if !strings.Contains(m.sidebar.View(), "users") {
+		t.Fatalf("schema should expand and list tables:\n%s", m.sidebar.View())
+	}
+
+	model, cmd = m.Update(tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.results.Result() != nil {
+		t.Fatal("single click should only select the table")
+	}
+
+	model, cmd = m.Update(tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
+	m = runCmd(t, model.(*Model), cmd)
+	if m.results.Result() == nil {
+		t.Fatalf("double click should open table data, status=%s", m.status)
+	}
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
 	}
 }
 
@@ -642,7 +696,7 @@ func TestMouseClickResults(t *testing.T) {
 	model, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
 	m = runCmd(t, model.(*Model), cmd)
 
-	x := m.sideW + 1 + 7
+	x := m.sideW + 2
 	y := m.editorH + 2 + 3
 	model, _ = m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
 	m = model.(*Model)
@@ -774,7 +828,7 @@ func TestMouseClickZoomResults(t *testing.T) {
 	m.zoom = true
 	m.layout()
 
-	model, _ = m.Update(tea.MouseClickMsg{X: 7, Y: 4, Button: tea.MouseLeft})
+	model, _ = m.Update(tea.MouseClickMsg{X: 1, Y: 4, Button: tea.MouseLeft})
 	m = model.(*Model)
 	row, col := m.results.CursorPosition()
 	if row != 0 || col != 0 {

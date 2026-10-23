@@ -55,6 +55,56 @@ func TestViewDimensionsAndCJK(t *testing.T) {
 	}
 }
 
+func TestQuerySQLFooter(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(120, 12)
+	m.SetResult(sample(5))
+	m.SetQuerySQL(`SELECT * FROM "users" ORDER BY "id" LIMIT 100 OFFSET 0;`)
+
+	if got := m.bodyRows(); got != 7 {
+		t.Fatalf("bodyRows = %d, want 7 with footer", got)
+	}
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != 12 {
+		t.Fatalf("lines = %d, want 12", len(lines))
+	}
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != 120 {
+			t.Fatalf("line %d width = %d, want 120: %q", i, w, line)
+		}
+	}
+	if !strings.Contains(lines[len(lines)-1], "SQL") || !strings.Contains(lines[len(lines)-1], "OFFSET 0") {
+		t.Fatalf("SQL footer missing:\n%s", view)
+	}
+
+	m.SetResult(sample(1))
+	if strings.Contains(m.View(), "OFFSET 0") {
+		t.Fatal("new result should clear the SQL footer")
+	}
+	if got := m.bodyRows(); got != 8 {
+		t.Fatalf("bodyRows = %d, want 8 without footer", got)
+	}
+}
+
+func TestSortIndicator(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 10)
+	m.SetResult(sample(3))
+	m.SetSort(0, true)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "id↑") {
+		t.Fatalf("ascending indicator missing:\n%s", view)
+	}
+	m.SetSort(0, false)
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "id↓") {
+		t.Fatalf("descending indicator missing:\n%s", view)
+	}
+	m.SetSort(-1, true)
+	if view := ansi.Strip(m.View()); strings.Contains(view, "id↑") || strings.Contains(view, "id↓") {
+		t.Fatalf("sort indicator should be cleared:\n%s", view)
+	}
+}
+
 func TestCursorNavigationScrolls(t *testing.T) {
 	m := New(i18n.New("en"))
 	m.SetSize(40, 6)
@@ -158,15 +208,15 @@ func TestHandleClick(t *testing.T) {
 	m.SetSize(60, 12)
 	m.SetResult(sample(10))
 
-	if !m.HandleClick(7, 3) {
+	if !m.HandleClick(1, 3) {
 		t.Fatal("click on a data cell should be handled")
 	}
 	row, col := m.CursorPosition()
 	if row != 0 || col != 0 {
 		t.Fatalf("cursor = %d,%d, want 0,0", row, col)
 	}
-	if !m.HandleClick(2, 4) {
-		t.Fatal("click on the row number should be handled")
+	if !m.HandleClick(1, 4) {
+		t.Fatal("click on the first column should be handled")
 	}
 	row, _ = m.CursorPosition()
 	if row != 1 {

@@ -2,6 +2,7 @@ package sidebar
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -63,6 +64,8 @@ type SelectTableMsg struct{ Schema, Table, Kind string }
 
 type TableMenuMsg struct{ Schema, Table, Kind string }
 
+type TableOpenMsg struct{ Schema, Table, Kind string }
+
 func MsgError(msg any) error {
 	switch m := msg.(type) {
 	case SchemasLoadedMsg:
@@ -84,9 +87,14 @@ type Model struct {
 	cursor        int
 	offset        int
 
+	lastClickIndex int
+	lastClickAt    time.Time
+
 	conn     db.Conn
 	connName string
 	epoch    uint64
+
+	activeSessions map[string]bool
 
 	configPath string
 }
@@ -112,6 +120,32 @@ func (m *Model) SetSize(width, height int) {
 
 func (m *Model) SetConfigPath(path string) {
 	m.configPath = path
+}
+
+func (m *Model) SetActiveSessions(names []string) {
+	m.activeSessions = make(map[string]bool, len(names))
+	for _, name := range names {
+		if name != "" {
+			m.activeSessions[name] = true
+		}
+	}
+}
+
+func (m *Model) isActive(name string) bool {
+	return name != "" && (name == m.connName || m.activeSessions[name])
+}
+
+func (m *Model) sessionCount() int {
+	seen := make(map[string]bool, len(m.activeSessions)+1)
+	for name := range m.activeSessions {
+		if name != "" {
+			seen[name] = true
+		}
+	}
+	if m.connName != "" {
+		seen[m.connName] = true
+	}
+	return len(seen)
 }
 
 func (m *Model) SetConn(conn db.Conn) tea.Cmd {
@@ -296,14 +330,37 @@ func (m *Model) activate() tea.Cmd {
 }
 
 func (m *Model) HandleClick(row int) tea.Cmd {
+	row -= m.headerHeight()
 	if row < 0 {
+		m.lastClickIndex = -1
 		return nil
 	}
 	index := m.offset + row
 	if index < 0 || index >= len(m.flat) {
+		m.lastClickIndex = -1
 		return nil
 	}
+	double := index == m.lastClickIndex && time.Since(m.lastClickAt) < 400*time.Millisecond
+	if double {
+		m.lastClickIndex = -1
+	} else {
+		m.lastClickIndex = index
+		m.lastClickAt = time.Now()
+	}
 	m.cursor = index
+	node := m.flat[index]
+	if node.Kind == KindTable {
+		if double {
+			schema, table, kind := node.Schema, node.Table, node.Sub
+			return func() tea.Msg {
+				return TableOpenMsg{Schema: schema, Table: table, Kind: kind}
+			}
+		}
+		return nil
+	}
+	if double {
+		return nil
+	}
 	return m.activate()
 }
 
@@ -396,29 +453,50 @@ func (m *Model) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
+	header := m.renderHeader()
+	bodyH := m.height - m.headerHeight()
+	if bodyH < 1 {
+		return textutil.FitLine(header, m.width)
+	}
 	if len(m.flat) == 0 {
-		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoConnections, m.configPath)), m.width, m.height)
+		message := textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoConnections, m.configPath)), m.width, bodyH)
+		return textutil.FitLines(header+"\n"+message, m.width, m.height)
 	}
 	if m.cursor < m.offset {
 		m.offset = m.cursor
 	}
-	if m.cursor >= m.offset+m.height {
-		m.offset = m.cursor - m.height + 1
+	if m.cursor >= m.offset+bodyH {
+		m.offset = m.cursor - bodyH + 1
 	}
 	if m.offset < 0 {
 		m.offset = 0
 	}
-	maxOffset := max(0, len(m.flat)-m.height)
+	maxOffset := max(0, len(m.flat)-bodyH)
 	if m.offset > maxOffset {
 		m.offset = maxOffset
 	}
 
 	lines := make([]string, 0, m.height)
+	lines = append(lines, header)
 	labelWidth := m.connectionLabelWidth()
 	for i := m.offset; i < len(m.flat) && len(lines) < m.height; i++ {
 		lines = append(lines, m.renderNode(m.flat[i], i == m.cursor, labelWidth))
 	}
 	return textutil.FitLines(strings.Join(lines, "\n"), m.width, m.height)
+}
+
+func (m *Model) headerHeight() int {
+	return 1
+}
+
+func (m *Model) renderHeader() string {
+	title := " " + m.t.T(i18n.KeySidebarTitle)
+	count := fmt.Sprintf(m.t.T(i18n.KeySidebarActive), m.sessionCount())
+	gap := max(0, m.width-textutil.Width(title)-textutil.Width(count)-2)
+	line := theme.Title.Render(title) + " " +
+		theme.Muted.Render(strings.Repeat("─", gap)) + " " +
+		theme.Muted.Render(count+" ")
+	return textutil.FitLine(line, m.width)
 }
 
 func (m *Model) connectionLabelWidth() int {
@@ -430,38 +508,78 @@ func (m *Model) connectionLabelWidth() int {
 }
 
 func (m *Model) renderNode(n *Node, selected bool, labelWidth int) string {
+	plain, styled := m.nodeLine(n, labelWidth)
+	plain = textutil.FitLine(plain, m.width)
+	if selected {
+		return theme.Selected.Render(plain)
+	}
+	return textutil.FitLine(styled, m.width)
+}
+
+func (m *Model) nodeLine(n *Node, labelWidth int) (string, string) {
 	indent := strings.Repeat("  ", n.Depth)
-	var text string
+	var plain, styled string
+	subGap := 0
 	switch n.Kind {
 	case KindConnection:
-		status := "○"
-		if n.ConnName == m.connName {
-			status = "●"
-		}
-		text = indent + status + " " + pad(typeIcon(n.Sub), 2) + " " + pad(n.Label, labelWidth)
-	case KindSchema, KindTable:
-		marker := "▸"
+		caret := "▸"
 		if n.Expanded {
-			marker = "▾"
+			caret = "▾"
 		}
-		text = indent + marker + " " + n.Label
+		dot := "○"
+		styledDot := theme.Muted.Render(dot)
+		styledName := n.Label
+		if n.ConnName == m.connName {
+			dot, styledDot = "●", theme.Title.Render("●")
+			styledName = theme.Title.Render(n.Label)
+		} else if m.isActive(n.ConnName) {
+			dot, styledDot = "◉", theme.Header.Render("◉")
+			styledName = theme.Header.Render(n.Label)
+		}
+		icon := typeIcon(n.Sub)
+		plain = indent + caret + " " + dot + " " + icon + " " + pad(n.Label, labelWidth)
+		styled = theme.Muted.Render(indent+caret) + " " + styledDot + " " +
+			theme.Header.Render(icon) + " " + pad(styledName, labelWidth)
+		subGap = 2
+	case KindSchema:
+		caret := "▸"
+		if n.Expanded {
+			caret = "▾"
+		}
+		plain = indent + caret + " " + n.Label
+		styled = theme.Muted.Render(indent+caret) + " " + theme.Header.Render(n.Label)
+	case KindTable:
+		caret := "▸"
+		if n.Expanded {
+			caret = "▾"
+		}
+		icon := tableIcon(n.Sub)
+		plain = indent + caret + " " + icon + " " + n.Label
+		styled = theme.Muted.Render(indent+caret) + " " + theme.Header.Render(icon) + " " + n.Label
 	case KindColumn:
-		text = indent + "· " + n.Label
-	}
-	if n.Sub != "" {
-		text += "  " + n.Sub
+		plain = indent + "· " + n.Label
+		styled = theme.Muted.Render(indent + "· " + n.Label)
 	}
 	if n.Loading {
-		text += " …"
+		plain += " …"
+		styled += " " + theme.Muted.Render("…")
 	}
-	text = textutil.FitLine(text, m.width)
-	if selected {
-		return theme.Selected.Render(text)
+	if n.Sub != "" {
+		gap := subGap
+		if gap == 0 {
+			gap = max(1, m.width-textutil.Width(plain)-textutil.Width(n.Sub)-1)
+		}
+		plain += strings.Repeat(" ", gap) + n.Sub
+		styled += strings.Repeat(" ", gap) + theme.Muted.Render(n.Sub)
 	}
-	if n.Kind == KindColumn {
-		return theme.Muted.Render(text)
+	return plain, styled
+}
+
+func pad(s string, width int) string {
+	if d := width - textutil.Width(s); d > 0 {
+		return s + strings.Repeat(" ", d)
 	}
-	return text
+	return s
 }
 
 func (m *Model) PreferredWidth() int {
@@ -470,7 +588,7 @@ func (m *Model) PreferredWidth() int {
 	for _, root := range m.roots {
 		subWidth = max(subWidth, textutil.Width(root.Sub))
 	}
-	return 5 + labelWidth + 2 + subWidth
+	return 8 + labelWidth + 2 + subWidth
 }
 
 func typeIcon(typ string) string {
@@ -490,11 +608,15 @@ func typeIcon(typ string) string {
 	}
 }
 
-func pad(s string, width int) string {
-	if d := width - textutil.Width(s); d > 0 {
-		return s + strings.Repeat(" ", d)
+func tableIcon(kind string) string {
+	switch strings.ToLower(kind) {
+	case "view":
+		return "◇"
+	case "materialized view":
+		return "◆"
+	default:
+		return "▦"
 	}
-	return s
 }
 
 func loadSchemas(conn db.Conn, node *Node, epoch uint64) tea.Cmd {

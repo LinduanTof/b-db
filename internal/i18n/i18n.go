@@ -66,6 +66,8 @@ var en = map[string]string{
 	KeyPaneConnections: "Connections",
 	KeyPaneSQL:         "SQL",
 	KeyPaneResults:     "Results",
+	KeySidebarTitle:    "Sessions",
+	KeySidebarActive:   "%d active",
 
 	KeyStatusReady:         "Ready",
 	KeyStatusConnecting:    "Connecting to %s…",
@@ -217,6 +219,7 @@ var en = map[string]string{
 
 	KeyNoRows:          "No rows",
 	KeyResultsAffected: "%d row(s) affected in %s",
+	KeyResultsSQL:      "SQL",
 }
 
 var zh = map[string]string{
@@ -225,6 +228,8 @@ var zh = map[string]string{
 	KeyPaneConnections: "连接",
 	KeyPaneSQL:         "SQL",
 	KeyPaneResults:     "结果",
+	KeySidebarTitle:    "会话",
+	KeySidebarActive:   "%d 活动",
 
 	KeyStatusReady:         "就绪",
 	KeyStatusConnecting:    "正在连接 %s…",
@@ -376,4 +381,5 @@ var zh = map[string]string{
 
 	KeyNoRows:          "没有数据",
 	KeyResultsAffected: "影响 %d 行，耗时 %s",
+	KeyResultsSQL:      "SQL",
 }

@@ -16,7 +16,10 @@ func TestHandleClickConnects(t *testing.T) {
 	}, i18n.New("en"))
 	m.SetSize(30, 10)
 
-	cmd := m.HandleClick(0)
+	if cmd := m.HandleClick(0); cmd != nil {
+		t.Fatal("clicking the header should do nothing")
+	}
+	cmd := m.HandleClick(1)
 	if cmd == nil {
 		t.Fatal("click on a connection should activate it")
 	}
@@ -53,6 +56,52 @@ func TestConnectionIconsAndAlignment(t *testing.T) {
 	if !strings.Contains(view, typeIcon(config.TypeSQLite)) ||
 		!strings.Contains(view, typeIcon(config.TypePostgres)) {
 		t.Fatalf("icons missing:\n%s", view)
+	}
+}
+
+func TestActiveSessionsInSidebar(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "a", Type: config.TypeSQLite, Path: "a.db"},
+		{Name: "b", Type: config.TypePostgres, Host: "h", User: "u", Database: "d"},
+		{Name: "c", Type: config.TypeMySQL, Host: "h", User: "u", Database: "d"},
+	}, i18n.New("en"))
+	m.SetSize(40, 10)
+	m.connName = "a"
+	m.SetActiveSessions([]string{"a", "b"})
+
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "2 active") {
+		t.Fatalf("session count missing:\n%s", view)
+	}
+	if !strings.Contains(view, "●") || !strings.Contains(view, "◉") || !strings.Contains(view, "○") {
+		t.Fatalf("session markers missing:\n%s", view)
+	}
+}
+
+func TestTableSingleClickSelectsDoubleClickOpens(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "local", Type: config.TypeSQLite, Path: "x.db"},
+	}, i18n.New("en"))
+	m.SetSize(30, 10)
+	table := &Node{Kind: KindTable, Label: "users", Sub: "table", ConnName: "local", Schema: "main", Table: "users"}
+	schema := &Node{Kind: KindSchema, Label: "main", ConnName: "local", Schema: "main", Expanded: true, Children: []*Node{table}}
+	m.roots[0].Expanded = true
+	m.roots[0].Children = []*Node{schema}
+	m.rebuild()
+
+	if cmd := m.HandleClick(3); cmd != nil {
+		t.Fatal("single click on a table should only select it")
+	}
+	if m.cursor != 2 {
+		t.Fatalf("cursor = %d, want table row", m.cursor)
+	}
+	cmd := m.HandleClick(3)
+	if cmd == nil {
+		t.Fatal("double click on a table should open it")
+	}
+	msg, ok := cmd().(TableOpenMsg)
+	if !ok || msg.Schema != "main" || msg.Table != "users" {
+		t.Fatalf("message = %#v", cmd())
 	}
 }
 

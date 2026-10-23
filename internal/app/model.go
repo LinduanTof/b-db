@@ -420,6 +420,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.switchToConnection(msg.Name)
 	case sidebar.SelectTableMsg:
 		return m, m.openTable(msg)
+	case sidebar.TableOpenMsg:
+		return m, m.openTableData(msg.Schema, msg.Table, msg.Kind)
 	case sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg:
 		if err := sidebar.MsgError(msg); err != nil {
 			m.setStatus(m.t.T(i18n.KeyErrorCatalog, err), true)
@@ -746,6 +748,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.beginCellEdit()
 		case "x", "delete":
 			return m.beginDeleteRow()
+		case "o":
+			if m.pager != nil {
+				return m.toggleTableSort()
+			}
+		case "O":
+			if m.pager != nil {
+				return m.clearTableSort()
+			}
 		case "c":
 			text := m.results.CursorCell()
 			if text == "" {
@@ -836,6 +846,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	m.connName = msg.name
 	m.tabConnName = msg.name
 	m.restoreTabsFor(msg.name)
+	m.syncSidebarSessions()
 	m.executor = query.Executor{
 		Conn:        m.conn,
 		MaxRows:     m.cfg.Query.MaxRows,
@@ -1010,6 +1021,12 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 	}
 
 	m.results.SetResult(out.Result)
+	if page.sortColumn != "" {
+		m.results.SetSort(m.results.ColumnIndex(page.sortColumn), page.sortAsc)
+	} else {
+		m.results.SetSort(-1, true)
+	}
+	m.results.SetQuerySQL(page.stmt)
 	m.results.SetSource(page.schema, page.table)
 	page.atEnd = len(out.Result.Rows) < page.size
 	page.refresh = false
@@ -1104,6 +1121,16 @@ func (m *Model) tableData(schema, table string) tea.Cmd {
 	})
 }
 
+func (m *Model) openTableData(schema, table, kind string) tea.Cmd {
+	if m.conn != nil && m.conn.Type() == "redis" {
+		return m.redisTableData(schema, table, kind)
+	}
+	if m.conn != nil && m.conn.Type() == "mongo" {
+		return m.mongoTableData(schema, table)
+	}
+	return m.tableData(schema, table)
+}
+
 func (m *Model) tableMenuItems() []menu.Item {
 	if m.conn != nil && m.conn.Type() == "redis" {
 		return []menu.Item{
@@ -1131,10 +1158,11 @@ func (m *Model) tableMenuItems() []menu.Item {
 
 func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	schema, table := m.tableMenuSchema, m.tableMenuTable
+	if msg.ID == "table.data" {
+		return m.openTableData(schema, table, m.tableMenuKind)
+	}
 	if m.conn != nil && m.conn.Type() == "redis" {
 		switch msg.ID {
-		case "table.data":
-			return m.redisTableData(schema, table, m.tableMenuKind)
 		case "table.select":
 			return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table, Kind: m.tableMenuKind})
 		}
@@ -1143,15 +1171,11 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	}
 	if m.conn != nil && m.conn.Type() == "mongo" {
 		switch msg.ID {
-		case "table.data":
-			return m.mongoTableData(schema, table)
 		case "table.select":
 			return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table, Kind: m.tableMenuKind})
 		}
 	}
 	switch msg.ID {
-	case "table.data":
-		return m.tableData(schema, table)
 	case "table.select":
 		return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table})
 	case "table.structure":
@@ -1306,6 +1330,17 @@ func (m *Model) applyMenuChange(msg menu.ChangedMsg) {
 	}
 }
 
+func (m *Model) syncSidebarSessions() {
+	names := make([]string, 0, len(m.sessions)+1)
+	for name := range m.sessions {
+		names = append(names, name)
+	}
+	if m.connName != "" {
+		names = append(names, m.connName)
+	}
+	m.sidebar.SetActiveSessions(names)
+}
+
 func (m *Model) disconnect() {
 	m.connectSeq++
 	if m.cancel != nil {
@@ -1330,6 +1365,7 @@ func (m *Model) disconnect() {
 	m.sidebar.ClearConn()
 	m.results.Clear()
 	_ = m.saveTabStatesNow()
+	m.syncSidebarSessions()
 	m.setStatus(m.t.T(i18n.KeyStatusDisconnected), false)
 }
 
@@ -1373,6 +1409,7 @@ func (m *Model) saveCurrentSession() {
 		activeTab:    m.activeTab,
 	}
 	_ = m.saveTabStatesNow()
+	m.syncSidebarSessions()
 }
 
 func (m *Model) activateSession(name string, saved *session) {
@@ -1408,6 +1445,7 @@ func (m *Model) activateSession(name string, saved *session) {
 	delete(m.sessions, name)
 	m.closeOverlays()
 	m.layout()
+	m.syncSidebarSessions()
 	m.setStatus(m.t.T(i18n.KeyStatusConnected, name), false)
 }
 
@@ -1426,6 +1464,7 @@ func (m *Model) resetSession() {
 	m.closeOverlays()
 	m.sidebar.ClearConn()
 	m.layout()
+	m.syncSidebarSessions()
 }
 
 func (m *Model) closeOverlays() {

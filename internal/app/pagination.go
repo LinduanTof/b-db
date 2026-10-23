@@ -12,12 +12,20 @@ import (
 	"github.com/LinduanTof/b-db/internal/i18n"
 )
 
+type orderTerm struct {
+	column string
+	desc   bool
+}
+
 type pagination struct {
 	schema     string
 	table      string
 	offset     int
 	size       int
-	orderBy    []string
+	orderBy    []orderTerm
+	primary    []string
+	sortColumn string
+	sortAsc    bool
 	stmt       string
 	atEnd      bool
 	refresh    bool
@@ -53,19 +61,21 @@ func (m *Model) runPageQuery(pager *pagination) tea.Cmd {
 	executor.MaxRows = page.size
 	conn := m.conn
 	typ := conn.Type()
-	orderBy := append([]string(nil), page.orderBy...)
+	primary := append([]string(nil), page.primary...)
 	needsMeta := !page.metaLoaded
+	sortColumn, sortAsc := page.sortColumn, page.sortAsc
 	schema, table, offset, size := page.schema, page.table, page.offset, page.size
 
 	return func() tea.Msg {
 		if needsMeta {
 			if columns, err := conn.Catalog().Columns(ctx, schema, table); err == nil {
-				orderBy = primaryKeys(columns)
+				primary = primaryKeys(columns)
 				page.metaLoaded = true
 			}
 		}
-		page.orderBy = orderBy
-		page.stmt = buildPageStmt(typ, schema, table, offset, size, orderBy)
+		page.primary = primary
+		page.orderBy = pageOrderTerms(sortColumn, sortAsc, primary)
+		page.stmt = buildPageStmt(typ, schema, table, offset, size, page.orderBy)
 		out := executor.Run(ctx, page.stmt)
 		cancel()
 		return tablePageDoneMsg{id: id, outcome: out, page: &page}
@@ -118,22 +128,73 @@ func (m *Model) previousPage() tea.Cmd {
 	return m.runPageQuery(&page)
 }
 
-func buildPageStmt(typ, schema, table string, offset, size int, orderBy []string) string {
+func buildPageStmt(typ, schema, table string, offset, size int, orderBy []orderTerm) string {
 	d := dialectFor(typ)
 	var b strings.Builder
 	b.WriteString("SELECT * FROM ")
 	b.WriteString(d.Qualified(schema, table))
 	if len(orderBy) > 0 {
 		b.WriteString(" ORDER BY ")
-		for i, column := range orderBy {
+		for i, term := range orderBy {
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			b.WriteString(d.Quote(column))
+			b.WriteString(d.Quote(term.column))
+			if term.desc {
+				b.WriteString(" DESC")
+			}
 		}
 	}
 	fmt.Fprintf(&b, " LIMIT %d OFFSET %d;", size, offset)
 	return b.String()
+}
+
+func pageOrderTerms(column string, asc bool, primary []string) []orderTerm {
+	var terms []orderTerm
+	if column != "" {
+		terms = append(terms, orderTerm{column: column, desc: !asc})
+	}
+	for _, key := range primary {
+		if key == column {
+			continue
+		}
+		terms = append(terms, orderTerm{column: key})
+	}
+	return terms
+}
+
+func (m *Model) toggleTableSort() tea.Cmd {
+	if m.pager == nil {
+		return nil
+	}
+	column := m.results.CursorColumnName()
+	if column == "" {
+		return nil
+	}
+	page := *m.pager
+	if page.sortColumn == column {
+		page.sortAsc = !page.sortAsc
+	} else {
+		page.sortColumn = column
+		page.sortAsc = true
+	}
+	page.offset = 0
+	page.atEnd = false
+	page.refresh = false
+	return m.runPageQuery(&page)
+}
+
+func (m *Model) clearTableSort() tea.Cmd {
+	if m.pager == nil || m.pager.sortColumn == "" {
+		return nil
+	}
+	page := *m.pager
+	page.sortColumn = ""
+	page.sortAsc = true
+	page.offset = 0
+	page.atEnd = false
+	page.refresh = false
+	return m.runPageQuery(&page)
 }
 
 func primaryKeys(columns []db.Column) []string {

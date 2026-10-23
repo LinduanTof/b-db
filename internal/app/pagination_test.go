@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LinduanTof/b-db/internal/db"
 )
@@ -18,18 +19,23 @@ func TestBuildPageStmt(t *testing.T) {
 		table   string
 		offset  int
 		size    int
-		orderBy []string
+		orderBy []orderTerm
 		want    string
 	}{
 		{
 			name: "sqlite with primary key", typ: "sqlite", schema: "main", table: "users",
-			offset: 4, size: 2, orderBy: []string{"id"},
+			offset: 4, size: 2, orderBy: []orderTerm{{column: "id"}},
 			want: `SELECT * FROM "users" ORDER BY "id" LIMIT 2 OFFSET 4;`,
 		},
 		{
 			name: "postgres composite key", typ: "postgres", schema: "public", table: "users",
-			offset: 0, size: 20, orderBy: []string{"id", "tenant"},
+			offset: 0, size: 20, orderBy: []orderTerm{{column: "id"}, {column: "tenant"}},
 			want: `SELECT * FROM "public"."users" ORDER BY "id", "tenant" LIMIT 20 OFFSET 0;`,
+		},
+		{
+			name: "sqlite sorted column with tie breaker", typ: "sqlite", schema: "main", table: "users",
+			offset: 0, size: 2, orderBy: []orderTerm{{column: "name", desc: true}, {column: "id"}},
+			want: `SELECT * FROM "users" ORDER BY "name" DESC, "id" LIMIT 2 OFFSET 0;`,
 		},
 		{
 			name: "mysql without order", typ: "mysql", schema: "bdb", table: "users",
@@ -78,7 +84,7 @@ func TestTablePagination(t *testing.T) {
 	if rs.Rows[0][0] != int64(1) {
 		t.Fatalf("page 1 first id = %#v", rs.Rows[0][0])
 	}
-	if m.pager == nil || m.pager.offset != 0 || len(m.pager.orderBy) != 1 || m.pager.orderBy[0] != "id" {
+	if m.pager == nil || m.pager.offset != 0 || len(m.pager.orderBy) != 1 || m.pager.orderBy[0].column != "id" {
 		t.Fatalf("pager = %#v", m.pager)
 	}
 	if !strings.Contains(m.status, "Page 1") || !strings.Contains(m.status, "2 row(s)") {
@@ -99,6 +105,9 @@ func TestTablePagination(t *testing.T) {
 	}
 	if !strings.Contains(m.status, "Page 2") {
 		t.Fatalf("status=%q", m.status)
+	}
+	if view := ansi.Strip(m.results.View()); !strings.Contains(view, "SQL") || !strings.Contains(view, "OFFSET 2") {
+		t.Fatalf("results should show the page SQL:\n%s", view)
 	}
 	if got := m.editor.Value(); got != "SELECT 42;" {
 		t.Fatalf("paging must not modify the editor, got %q", got)
@@ -151,6 +160,9 @@ func TestPaginationClearedByCustomQuery(t *testing.T) {
 	m = runCmd(t, m, m.runQuery())
 	if m.pager != nil {
 		t.Fatal("custom query should clear pagination")
+	}
+	if view := ansi.Strip(m.results.View()); strings.Contains(view, "OFFSET") {
+		t.Fatalf("custom query should clear the page SQL:\n%s", view)
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Text: "n"})
 	if !strings.Contains(m.status, "not a table page") {
@@ -268,5 +280,71 @@ func TestPaginationStopsAtFullLastPage(t *testing.T) {
 	rs = m.results.Result()
 	if rs == nil || len(rs.Rows) != 2 || rs.Rows[0][0] != int64(3) {
 		t.Fatalf("results should stay on the last full page: %#v", rs)
+	}
+}
+
+func TestPageOrderTerms(t *testing.T) {
+	terms := pageOrderTerms("name", false, []string{"id", "name", "tenant"})
+	if len(terms) != 3 {
+		t.Fatalf("terms = %#v", terms)
+	}
+	if terms[0] != (orderTerm{column: "name", desc: true}) ||
+		terms[1] != (orderTerm{column: "id"}) ||
+		terms[2] != (orderTerm{column: "tenant"}) {
+		t.Fatalf("terms = %#v", terms)
+	}
+}
+
+func TestTableSortUsesOrderBy(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.cfg.Query.MaxRows = 2
+
+	m = runCmd(t, m, m.tableData("main", "users"))
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "n"})
+	if m.pager == nil || m.pager.offset != 2 {
+		t.Fatalf("pager = %#v", m.pager)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "o"})
+	if m.pager.sortColumn != "id" || !m.pager.sortAsc || m.pager.offset != 0 {
+		t.Fatalf("sorted pager = %#v", m.pager)
+	}
+	view := ansi.Strip(m.results.View())
+	if !strings.Contains(view, `ORDER BY "id" LIMIT`) {
+		t.Fatalf("SQL footer missing ORDER BY:\n%s", view)
+	}
+	if !strings.Contains(view, "id↑") {
+		t.Fatalf("ascending indicator missing:\n%s", view)
+	}
+	if m.results.Result() == nil || m.results.Result().Rows[0][0] != int64(1) {
+		t.Fatalf("sorted result = %#v", m.results.Result())
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "o"})
+	if m.pager.sortAsc {
+		t.Fatalf("descending pager = %#v", m.pager)
+	}
+	view = ansi.Strip(m.results.View())
+	if !strings.Contains(view, `ORDER BY "id" DESC`) {
+		t.Fatalf("SQL footer missing DESC:\n%s", view)
+	}
+	if !strings.Contains(view, "id↓") {
+		t.Fatalf("descending indicator missing:\n%s", view)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "O"})
+	if m.pager.sortColumn != "" || !m.pager.sortAsc {
+		t.Fatalf("cleared pager = %#v", m.pager)
+	}
+	view = ansi.Strip(m.results.View())
+	if !strings.Contains(view, `ORDER BY "id" LIMIT`) {
+		t.Fatalf("SQL footer should fall back to primary key:\n%s", view)
 	}
 }

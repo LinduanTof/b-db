@@ -6,6 +6,8 @@ const (
 	KeyPaneConnections = "pane.connections"
 	KeyPaneSQL         = "pane.sql"
 	KeyPaneResults     = "pane.results"
+	KeySidebarTitle    = "sidebar.title"
+	KeySidebarActive   = "sidebar.active"
 
 	KeyStatusReady         = "status.ready"
 	KeyStatusConnecting    = "status.connecting"
@@ -156,4 +158,5 @@ const (
 
 	KeyNoRows          = "results.no_rows"
 	KeyResultsAffected = "results.affected"
+	KeyResultsSQL      = "results.sql"
 )
