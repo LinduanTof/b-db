@@ -1026,7 +1026,6 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 	} else {
 		m.results.SetSort(-1, true)
 	}
-	m.results.SetQuerySQL(page.stmt)
 	m.results.SetSource(page.schema, page.table)
 	page.atEnd = len(out.Result.Rows) < page.size
 	page.refresh = false

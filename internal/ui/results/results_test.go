@@ -55,38 +55,6 @@ func TestViewDimensionsAndCJK(t *testing.T) {
 	}
 }
 
-func TestQuerySQLFooter(t *testing.T) {
-	m := New(i18n.New("en"))
-	m.SetSize(120, 12)
-	m.SetResult(sample(5))
-	m.SetQuerySQL(`SELECT * FROM "users" ORDER BY "id" LIMIT 100 OFFSET 0;`)
-
-	if got := m.bodyRows(); got != 7 {
-		t.Fatalf("bodyRows = %d, want 7 with footer", got)
-	}
-	view := m.View()
-	lines := strings.Split(view, "\n")
-	if len(lines) != 12 {
-		t.Fatalf("lines = %d, want 12", len(lines))
-	}
-	for i, line := range lines {
-		if w := ansi.StringWidth(line); w != 120 {
-			t.Fatalf("line %d width = %d, want 120: %q", i, w, line)
-		}
-	}
-	if !strings.Contains(lines[len(lines)-1], "SQL") || !strings.Contains(lines[len(lines)-1], "OFFSET 0") {
-		t.Fatalf("SQL footer missing:\n%s", view)
-	}
-
-	m.SetResult(sample(1))
-	if strings.Contains(m.View(), "OFFSET 0") {
-		t.Fatal("new result should clear the SQL footer")
-	}
-	if got := m.bodyRows(); got != 8 {
-		t.Fatalf("bodyRows = %d, want 8 without footer", got)
-	}
-}
-
 func TestSortIndicator(t *testing.T) {
 	m := New(i18n.New("en"))
 	m.SetSize(60, 10)

@@ -106,8 +106,8 @@ func TestTablePagination(t *testing.T) {
 	if !strings.Contains(m.status, "Page 2") {
 		t.Fatalf("status=%q", m.status)
 	}
-	if view := ansi.Strip(m.results.View()); !strings.Contains(view, "SQL") || !strings.Contains(view, "OFFSET 2") {
-		t.Fatalf("results should show the page SQL:\n%s", view)
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "SQL SELECT * FROM \"users\"") || !strings.Contains(view, "Page 2") {
+		t.Fatalf("status bar should show the page SQL:\n%s", view)
 	}
 	if got := m.editor.Value(); got != "SELECT 42;" {
 		t.Fatalf("paging must not modify the editor, got %q", got)
@@ -161,8 +161,8 @@ func TestPaginationClearedByCustomQuery(t *testing.T) {
 	if m.pager != nil {
 		t.Fatal("custom query should clear pagination")
 	}
-	if view := ansi.Strip(m.results.View()); strings.Contains(view, "OFFSET") {
-		t.Fatalf("custom query should clear the page SQL:\n%s", view)
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "OFFSET") {
+		t.Fatalf("custom query should clear the page SQL from the status bar:\n%s", view)
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Text: "n"})
 	if !strings.Contains(m.status, "not a table page") {
@@ -316,12 +316,13 @@ func TestTableSortUsesOrderBy(t *testing.T) {
 	if m.pager.sortColumn != "id" || !m.pager.sortAsc || m.pager.offset != 0 {
 		t.Fatalf("sorted pager = %#v", m.pager)
 	}
-	view := ansi.Strip(m.results.View())
-	if !strings.Contains(view, `ORDER BY "id" LIMIT`) {
-		t.Fatalf("SQL footer missing ORDER BY:\n%s", view)
+	resultsView := ansi.Strip(m.results.View())
+	statusView := ansi.Strip(m.View().Content)
+	if !strings.Contains(statusView, `ORDER BY "id" LIMIT`) {
+		t.Fatalf("status bar missing ORDER BY:\n%s", statusView)
 	}
-	if !strings.Contains(view, "id↑") {
-		t.Fatalf("ascending indicator missing:\n%s", view)
+	if !strings.Contains(resultsView, "id↑") {
+		t.Fatalf("ascending indicator missing:\n%s", resultsView)
 	}
 	if m.results.Result() == nil || m.results.Result().Rows[0][0] != int64(1) {
 		t.Fatalf("sorted result = %#v", m.results.Result())
@@ -331,20 +332,21 @@ func TestTableSortUsesOrderBy(t *testing.T) {
 	if m.pager.sortAsc {
 		t.Fatalf("descending pager = %#v", m.pager)
 	}
-	view = ansi.Strip(m.results.View())
-	if !strings.Contains(view, `ORDER BY "id" DESC`) {
-		t.Fatalf("SQL footer missing DESC:\n%s", view)
+	resultsView = ansi.Strip(m.results.View())
+	statusView = ansi.Strip(m.View().Content)
+	if !strings.Contains(statusView, `ORDER BY "id" DESC`) {
+		t.Fatalf("status bar missing DESC:\n%s", statusView)
 	}
-	if !strings.Contains(view, "id↓") {
-		t.Fatalf("descending indicator missing:\n%s", view)
+	if !strings.Contains(resultsView, "id↓") {
+		t.Fatalf("descending indicator missing:\n%s", resultsView)
 	}
 
 	m = sendKey(t, m, tea.KeyPressMsg{Text: "O"})
 	if m.pager.sortColumn != "" || !m.pager.sortAsc {
 		t.Fatalf("cleared pager = %#v", m.pager)
 	}
-	view = ansi.Strip(m.results.View())
-	if !strings.Contains(view, `ORDER BY "id" LIMIT`) {
-		t.Fatalf("SQL footer should fall back to primary key:\n%s", view)
+	statusView = ansi.Strip(m.View().Content)
+	if !strings.Contains(statusView, `ORDER BY "id" LIMIT`) {
+		t.Fatalf("status bar should fall back to primary key:\n%s", statusView)
 	}
 }

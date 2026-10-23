@@ -39,7 +39,6 @@ type Model struct {
 
 	sourceSchema string
 	sourceTable  string
-	querySQL     string
 
 	order   []int
 	sortCol int
@@ -57,7 +56,6 @@ func (m *Model) SetSize(width, height int) {
 func (m *Model) SetResult(rs *db.ResultSet) {
 	m.rs = rs
 	m.sourceSchema, m.sourceTable = "", ""
-	m.querySQL = ""
 	m.errText = ""
 	m.affected = nil
 	m.elapsed = rs.Elapsed
@@ -86,7 +84,6 @@ func (m *Model) SetExec(affected int64, elapsed time.Duration) {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
-	m.querySQL = ""
 	m.errText = ""
 	m.affected = &affected
 	m.elapsed = elapsed
@@ -96,13 +93,8 @@ func (m *Model) SetError(text string) {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
-	m.querySQL = ""
 	m.affected = nil
 	m.errText = text
-}
-
-func (m *Model) SetQuerySQL(sql string) {
-	m.querySQL = sql
 }
 
 func (m *Model) Result() *db.ResultSet { return m.rs }
@@ -128,7 +120,6 @@ func (m *Model) Clear() {
 	m.rs = nil
 	m.cells = nil
 	m.widths = nil
-	m.querySQL = ""
 	m.affected = nil
 	m.errText = ""
 	m.cursorRow, m.cursorCol = 0, 0
@@ -512,11 +503,7 @@ func (m *Model) ensureVisible() {
 }
 
 func (m *Model) bodyRows() int {
-	height := m.height
-	if m.querySQL != "" {
-		height--
-	}
-	return max(0, height-4)
+	return max(0, m.height-4)
 }
 
 type column struct {
@@ -573,18 +560,8 @@ func (m *Model) View() string {
 	if m.rs == nil {
 		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyResultsPrompt)), m.width, m.height)
 	}
-	gridHeight := m.height
-	footer := ""
-	if m.querySQL != "" {
-		gridHeight--
-		footer = m.renderQuerySQL()
-	}
-	if gridHeight < 4 {
-		content := theme.Muted.Render(m.t.T(i18n.KeyNoRows))
-		if footer != "" {
-			content += "\n" + footer
-		}
-		return textutil.FitLines(content, m.width, m.height)
+	if m.height < 4 {
+		return textutil.FitLines(theme.Muted.Render(m.t.T(i18n.KeyNoRows)), m.width, m.height)
 	}
 
 	m.ensureVisible()
@@ -599,23 +576,15 @@ func (m *Model) View() string {
 			lines = append(lines, m.messageRow(m.t.T(i18n.KeyNoRows)))
 		}
 	} else {
-		for r := m.scrollRow; r < len(m.cells) && len(lines) < gridHeight-1; r++ {
+		for r := m.scrollRow; r < len(m.cells) && len(lines) < m.height-1; r++ {
 			lines = append(lines, m.renderRow(layout, r, r == m.cursorRow))
 		}
 	}
-	for len(lines) < gridHeight-1 {
+	for len(lines) < m.height-1 {
 		lines = append(lines, m.emptyRow(layout))
 	}
 	lines = append(lines, m.borderLine(layout, borderBottom))
-	if footer != "" {
-		lines = append(lines, footer)
-	}
 	return strings.Join(lines, "\n")
-}
-
-func (m *Model) renderQuerySQL() string {
-	label := theme.Header.Render(" " + m.t.T(i18n.KeyResultsSQL) + " ")
-	return textutil.FitLine(label+theme.Muted.Render(m.querySQL), m.width)
 }
 
 type borderKind int

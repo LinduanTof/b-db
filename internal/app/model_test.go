@@ -638,6 +638,16 @@ func TestTableIndexesAction(t *testing.T) {
 	}
 }
 
+func TestSidebarHeightExcludesPaneTitle(t *testing.T) {
+	m := testModel(t, "en")
+	m.layout()
+	lines := strings.Split(m.sidebar.View(), "\n")
+	want := m.height - 3 // status bar + menu bar + pane title
+	if len(lines) != want {
+		t.Fatalf("sidebar lines = %d, want %d", len(lines), want)
+	}
+}
+
 func TestMouseClickSidebar(t *testing.T) {
 	m := testModel(t, "en")
 	model, cmd := m.Update(tea.MouseClickMsg{X: 3, Y: 2, Button: tea.MouseLeft})

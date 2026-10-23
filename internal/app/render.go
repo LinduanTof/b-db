@@ -27,7 +27,7 @@ func (m *Model) layout() {
 			m.sideW, m.rightW = m.width, 0
 			m.editorH, m.resultsH = 0, 0
 		}
-		m.sidebar.SetSize(max(1, m.sideW), mainH)
+		m.sidebar.SetSize(max(1, m.sideW), max(1, mainH-1))
 		m.editor.SetSize(max(1, m.rightW), max(1, m.editorH-2))
 		m.results.SetSize(max(1, m.rightW), max(1, m.resultsH-1))
 		return
@@ -67,7 +67,7 @@ func (m *Model) layout() {
 	}
 
 	m.sideW, m.rightW, m.editorH, m.resultsH = sideW, rightW, editorH, resultsH
-	m.sidebar.SetSize(sideW, mainH)
+	m.sidebar.SetSize(sideW, max(1, mainH-1))
 	m.editor.SetSize(rightW, max(1, editorH-2))
 	m.results.SetSize(rightW, resultsH-1)
 }
@@ -134,6 +134,7 @@ func (m *Model) renderMain() string {
 
 	m.statusbar.Width = m.width
 	m.statusbar.Left = m.statusLeft()
+	m.statusbar.Center = m.previewSQL()
 	m.statusbar.Right = m.status
 	m.statusbar.IsError = m.statusErr
 	menu := theme.MenuBar.Render(textutil.FitLine(" "+m.t.T(i18n.KeyMenuBarHint), m.width))
@@ -184,6 +185,13 @@ func (m *Model) statusLeft() string {
 		parts = append(parts, "● "+m.connName)
 	}
 	return strings.Join(parts, "  ")
+}
+
+func (m *Model) previewSQL() string {
+	if m.pager == nil || m.pager.stmt == "" {
+		return ""
+	}
+	return m.t.T(i18n.KeyResultsSQL) + " " + m.pager.stmt
 }
 
 func renderPane(title, hint, body string, width, height int) string {
