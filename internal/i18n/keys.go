@@ -6,12 +6,10 @@ const (
 	KeyPaneConnections = "pane.connections"
 	KeyPaneSQL         = "pane.sql"
 	KeyPaneResults     = "pane.results"
-	KeySidebarTitle    = "sidebar.title"
 	KeySidebarActive   = "sidebar.active"
 
 	KeyStatusReady         = "status.ready"
 	KeyStatusConnecting    = "status.connecting"
-	KeyStatusConnected     = "status.connected"
 	KeyStatusDisconnected  = "status.disconnected"
 	KeyStatusRunning       = "status.running"
 	KeyStatusCancelled     = "status.cancelled"

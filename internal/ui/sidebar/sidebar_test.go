@@ -7,8 +7,40 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LinduanTof/b-db/internal/config"
+	"github.com/LinduanTof/b-db/internal/db"
 	"github.com/LinduanTof/b-db/internal/i18n"
 )
+
+type fakeConn struct {
+	db.Conn
+	name string
+	typ  string
+}
+
+func (f fakeConn) Name() string { return f.name }
+func (f fakeConn) Type() string { return f.typ }
+
+func TestPostgresDatabaseTree(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "pg", Type: config.TypePostgres, Database: "bdb", Host: "h", User: "u"},
+	}, i18n.New("en"))
+	m.SetSize(40, 12)
+	m.SetDatabases("pg", []DatabaseEntry{
+		{Name: "bdb", Session: "pg"},
+		{Name: "postgres", Session: "pg/postgres"},
+	})
+	m.SetActiveSessions([]string{"pg", "pg/postgres"})
+	if cmd := m.SetDatabaseConn(fakeConn{name: "pg", typ: config.TypePostgres}, "pg", "bdb", "pg"); cmd == nil {
+		t.Fatal("selecting a database should load its schemas")
+	}
+
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"▾ ● ▤ bdb", "▸ ◉ ▤ postgres", "2 active"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+}
 
 func TestHandleClickConnects(t *testing.T) {
 	m := New([]config.Connection{

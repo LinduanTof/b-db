@@ -60,6 +60,12 @@ type Catalog interface {
 	DDL(ctx context.Context, schema, table string) (string, error)
 }
 
+// DatabaseLister is implemented by catalogs that can enumerate databases on
+// the server, such as PostgreSQL.
+type DatabaseLister interface {
+	Databases(ctx context.Context) ([]string, error)
+}
+
 type Querier interface {
 	Query(ctx context.Context, stmt string, maxRows int) (*ResultSet, error)
 	Exec(ctx context.Context, stmt string) (*ExecResult, error)

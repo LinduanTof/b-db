@@ -134,7 +134,7 @@ func (m *Model) renderMain() string {
 
 	m.statusbar.Width = m.width
 	m.statusbar.Left = m.statusLeft()
-	m.statusbar.Right = m.status
+	m.statusbar.Right = m.statusRight()
 	m.statusbar.IsError = m.statusErr
 	menu := theme.MenuBar.Render(textutil.FitLine(" "+m.t.T(i18n.KeyMenuBarHint), m.width))
 	return body + "\n" + m.statusbar.View() + "\n" + menu
@@ -171,7 +171,7 @@ func (m *Model) renderHelp() string {
 }
 
 func (m *Model) statusLeft() string {
-	parts := []string{m.t.T(i18n.KeyAppTitle)}
+	parts := make([]string, 0, 2)
 	switch m.focus {
 	case focusSidebar:
 		parts = append(parts, m.t.T(i18n.KeyPaneConnections))
@@ -180,10 +180,26 @@ func (m *Model) statusLeft() string {
 	case focusResults:
 		parts = append(parts, m.t.T(i18n.KeyPaneResults))
 	}
-	if m.connName != "" {
-		parts = append(parts, "● "+m.connName)
+	if title := m.activeTabTitle(); title != "" {
+		parts = append(parts, title)
 	}
-	return strings.Join(parts, "  ")
+	return " " + strings.Join(parts, "  │  ") + " "
+}
+
+func (m *Model) statusRight() string {
+	if m.status == "" {
+		return ""
+	}
+	icon := "•"
+	switch {
+	case m.statusErr:
+		icon = "✗"
+	case m.running:
+		icon = "…"
+	case m.status == m.t.T(i18n.KeyStatusReady):
+		icon = "✓"
+	}
+	return icon + " " + m.status + " "
 }
 
 func renderPane(title, hint, body string, width, height int) string {

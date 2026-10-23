@@ -19,22 +19,29 @@ type NodeKind int
 
 const (
 	KindConnection NodeKind = iota
+	KindDatabase
 	KindSchema
 	KindTable
 	KindColumn
 )
 
 type Node struct {
-	Kind     NodeKind
-	Label    string
-	Sub      string
-	ConnName string
-	Schema   string
-	Table    string
-	Depth    int
-	Expanded bool
-	Loading  bool
-	Children []*Node
+	Kind        NodeKind
+	Label       string
+	Sub         string
+	ConnName    string
+	SessionName string
+	Schema      string
+	Table       string
+	Depth       int
+	Expanded    bool
+	Loading     bool
+	Children    []*Node
+}
+
+type DatabaseEntry struct {
+	Name    string
+	Session string
 }
 
 type SchemasLoadedMsg struct {
@@ -59,6 +66,8 @@ type ColumnsLoadedMsg struct {
 }
 
 type ConnectMsg struct{ Name string }
+
+type DatabaseMsg struct{ Session string }
 
 type SelectTableMsg struct{ Schema, Table, Kind string }
 
@@ -95,6 +104,7 @@ type Model struct {
 	epoch    uint64
 
 	activeSessions map[string]bool
+	currentLabel   string
 
 	configPath string
 }
@@ -132,6 +142,29 @@ func (m *Model) SetActiveSessions(names []string) {
 }
 
 func (m *Model) isActive(name string) bool {
+	if name == "" {
+		return false
+	}
+	if name == m.connName || m.activeSessions[name] {
+		return true
+	}
+	prefix := name + "/"
+	if strings.HasPrefix(m.connName, prefix) {
+		return true
+	}
+	for session := range m.activeSessions {
+		if strings.HasPrefix(session, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) isCurrentRoot(name string) bool {
+	return name != "" && (name == m.connName || strings.HasPrefix(m.connName, name+"/"))
+}
+
+func (m *Model) isSessionActive(name string) bool {
 	return name != "" && (name == m.connName || m.activeSessions[name])
 }
 
@@ -153,6 +186,7 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 	epoch := m.epoch
 	m.conn = conn
 	m.connName = conn.Name()
+	m.currentLabel = ""
 	for _, root := range m.roots {
 		root.Children = nil
 		root.Expanded = false
@@ -170,6 +204,100 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 	return nil
 }
 
+func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) tea.Cmd {
+	m.epoch++
+	epoch := m.epoch
+	m.conn = conn
+	m.connName = session
+	m.currentLabel = database
+
+	var root *Node
+	for _, candidate := range m.roots {
+		candidate.Expanded = candidate.ConnName == base
+		if candidate.ConnName == base {
+			root = candidate
+		}
+		for _, child := range candidate.Children {
+			if child.Kind == KindDatabase {
+				child.Expanded = false
+				child.Loading = false
+				child.Children = nil
+			}
+		}
+	}
+	if root == nil {
+		m.rebuild()
+		return nil
+	}
+	var dbNode *Node
+	for _, child := range root.Children {
+		if child.Kind == KindDatabase && child.SessionName == session {
+			dbNode = child
+			break
+		}
+	}
+	if dbNode == nil {
+		dbNode = &Node{Kind: KindDatabase, ConnName: session, SessionName: session}
+		root.Children = append(root.Children, dbNode)
+	}
+	dbNode.Label = database
+	dbNode.ConnName = session
+	dbNode.SessionName = session
+	dbNode.Expanded = true
+	dbNode.Loading = true
+	root.Expanded = true
+	m.rebuild()
+	return loadSchemas(conn, dbNode, epoch)
+}
+
+func (m *Model) SetDatabases(base string, entries []DatabaseEntry) {
+	var root *Node
+	for _, candidate := range m.roots {
+		if candidate.ConnName == base {
+			root = candidate
+			break
+		}
+	}
+	if root == nil {
+		return
+	}
+	existing := make(map[string]*Node, len(root.Children))
+	for _, child := range root.Children {
+		if child.Kind == KindDatabase {
+			existing[child.SessionName] = child
+		}
+	}
+	nodes := make([]*Node, 0, len(entries)+len(existing))
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if entry.Name == "" || entry.Session == "" || seen[entry.Session] {
+			continue
+		}
+		seen[entry.Session] = true
+		node := existing[entry.Session]
+		if node == nil {
+			node = &Node{Kind: KindDatabase, ConnName: entry.Session, SessionName: entry.Session}
+		}
+		node.Label = entry.Name
+		node.ConnName = entry.Session
+		node.SessionName = entry.Session
+		if !m.isSessionActive(entry.Session) {
+			node.Expanded = false
+			node.Loading = false
+			node.Children = nil
+		}
+		nodes = append(nodes, node)
+	}
+	for session, node := range existing {
+		if !seen[session] && m.isSessionActive(session) {
+			nodes = append(nodes, node)
+		}
+	}
+	root.Children = nodes
+	root.Expanded = true
+	m.rebuild()
+}
+
 func (m *Model) AddConnection(c config.Connection) {
 	for _, root := range m.roots {
 		if root.ConnName == c.Name {
@@ -185,6 +313,15 @@ func (m *Model) AddConnection(c config.Connection) {
 	m.rebuild()
 }
 
+func (m *Model) connectionLabel(name string) string {
+	for _, root := range m.roots {
+		if root.ConnName == name {
+			return root.Label
+		}
+	}
+	return name
+}
+
 func (m *Model) SelectedTable() (schema, table string, ok bool) {
 	n := m.selected()
 	if n == nil || n.Kind != KindTable {
@@ -197,6 +334,7 @@ func (m *Model) ClearConn() {
 	m.epoch++
 	m.conn = nil
 	m.connName = ""
+	m.currentLabel = ""
 	for _, root := range m.roots {
 		root.Children = nil
 		root.Expanded = false
@@ -318,9 +456,13 @@ func (m *Model) activate() tea.Cmd {
 	if n == nil {
 		return nil
 	}
-	if n.Kind == KindConnection && n.ConnName != m.connName {
+	if n.Kind == KindConnection && !m.isCurrentRoot(n.ConnName) {
 		name := n.ConnName
 		return func() tea.Msg { return ConnectMsg{Name: name} }
+	}
+	if n.Kind == KindDatabase && n.SessionName != m.connName {
+		session := n.SessionName
+		return func() tea.Msg { return DatabaseMsg{Session: session} }
 	}
 	if n.Kind == KindTable {
 		schema, table, kind := n.Schema, n.Table, n.Sub
@@ -358,6 +500,12 @@ func (m *Model) HandleClick(row int) tea.Cmd {
 		}
 		return nil
 	}
+	if node.Kind == KindDatabase {
+		if double {
+			return m.activate()
+		}
+		return nil
+	}
 	if double {
 		return nil
 	}
@@ -383,6 +531,19 @@ func (m *Model) move(delta int) {
 }
 
 func (m *Model) toggle(n *Node) tea.Cmd {
+	if n.Kind == KindConnection && n.Sub == config.TypePostgres {
+		if !m.isCurrentRoot(n.ConnName) {
+			name := n.ConnName
+			return func() tea.Msg { return ConnectMsg{Name: name} }
+		}
+		n.Expanded = !n.Expanded
+		m.rebuild()
+		return nil
+	}
+	if n.Kind == KindDatabase && n.SessionName != m.connName {
+		session := n.SessionName
+		return func() tea.Msg { return DatabaseMsg{Session: session} }
+	}
 	if n.Expanded {
 		n.Expanded = false
 		m.rebuild()
@@ -401,6 +562,10 @@ func (m *Model) toggle(n *Node) tea.Cmd {
 		n.Loading = true
 		m.rebuild()
 		return loadSchemas(m.conn, n, m.epoch)
+	case KindDatabase:
+		n.Loading = true
+		m.rebuild()
+		return loadSchemas(m.conn, n, m.epoch)
 	case KindSchema:
 		n.Loading = true
 		m.rebuild()
@@ -416,10 +581,15 @@ func (m *Model) toggle(n *Node) tea.Cmd {
 func (m *Model) reload(n *Node) tea.Cmd {
 	switch n.Kind {
 	case KindConnection:
-		if m.conn == nil || m.conn.Name() != n.ConnName {
+		if !m.isCurrentRoot(n.ConnName) {
 			return nil
 		}
-	case KindSchema, KindTable:
+		if n.Sub == config.TypePostgres {
+			n.Expanded = true
+			m.rebuild()
+			return nil
+		}
+	case KindDatabase, KindSchema, KindTable:
 	default:
 		return nil
 	}
@@ -490,12 +660,44 @@ func (m *Model) headerHeight() int {
 }
 
 func (m *Model) renderHeader() string {
-	title := " " + m.t.T(i18n.KeySidebarTitle)
+	name := m.t.T(i18n.KeyStatusNoConnection)
+	typ := ""
+	dot := "○"
+	styledDot := theme.Muted.Render(dot)
+	styledName := theme.Muted.Render(name)
+	if m.connName != "" {
+		name = m.connectionLabel(m.connName)
+		if m.currentLabel != "" {
+			name = m.currentLabel
+		}
+		dot = "●"
+		styledDot = theme.Title.Render(dot)
+		styledName = theme.Title.Render(name)
+		if m.conn != nil {
+			typ = m.conn.Type()
+		} else {
+			for _, root := range m.roots {
+				if root.ConnName == m.connName {
+					typ = root.Sub
+					break
+				}
+			}
+		}
+	}
+	plain := " " + dot + " " + name
+	styled := " " + styledDot + " " + styledName
 	count := fmt.Sprintf(m.t.T(i18n.KeySidebarActive), m.sessionCount())
-	gap := max(0, m.width-textutil.Width(title)-textutil.Width(count)-2)
-	line := theme.Title.Render(title) + " " +
-		theme.Muted.Render(strings.Repeat("─", gap)) + " " +
-		theme.Muted.Render(count+" ")
+	available := max(0, m.width-textutil.Width(count)-2)
+	if typ != "" && textutil.Width(plain)+2+textutil.Width(typ) <= available {
+		plain += "  " + typ
+		styled += "  " + theme.Muted.Render(typ)
+	}
+	if textutil.Width(plain) > available {
+		plain = textutil.Truncate(plain, available)
+		styled = textutil.Truncate(styled, available)
+	}
+	gap := max(0, m.width-textutil.Width(plain)-textutil.Width(count)-2)
+	line := styled + " " + theme.Muted.Render(strings.Repeat("─", gap)) + " " + theme.Muted.Render(count)
 	return textutil.FitLine(line, m.width)
 }
 
@@ -529,7 +731,7 @@ func (m *Model) nodeLine(n *Node, labelWidth int) (string, string) {
 		dot := "○"
 		styledDot := theme.Muted.Render(dot)
 		styledName := n.Label
-		if n.ConnName == m.connName {
+		if m.isCurrentRoot(n.ConnName) {
 			dot, styledDot = "●", theme.Title.Render("●")
 			styledName = theme.Title.Render(n.Label)
 		} else if m.isActive(n.ConnName) {
@@ -541,6 +743,26 @@ func (m *Model) nodeLine(n *Node, labelWidth int) (string, string) {
 		styled = theme.Muted.Render(indent+caret) + " " + styledDot + " " +
 			theme.Header.Render(icon) + " " + pad(styledName, labelWidth)
 		subGap = 2
+	case KindDatabase:
+		caret := "▸"
+		if n.Expanded {
+			caret = "▾"
+		}
+		current := n.SessionName == m.connName
+		active := current || m.isSessionActive(n.SessionName)
+		dot := "○"
+		styledDot := theme.Muted.Render(dot)
+		styledName := n.Label
+		if current {
+			dot, styledDot = "●", theme.Title.Render("●")
+			styledName = theme.Title.Render(n.Label)
+		} else if active {
+			dot, styledDot = "◉", theme.Header.Render("◉")
+			styledName = theme.Header.Render(n.Label)
+		}
+		plain = indent + caret + " " + dot + " ▤ " + n.Label
+		styled = theme.Muted.Render(indent+caret) + " " + styledDot + " " +
+			theme.Header.Render("▤") + " " + styledName
 	case KindSchema:
 		caret := "▸"
 		if n.Expanded {

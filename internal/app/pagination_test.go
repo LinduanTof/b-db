@@ -87,7 +87,7 @@ func TestTablePagination(t *testing.T) {
 	if m.pager == nil || m.pager.offset != 0 || len(m.pager.orderBy) != 1 || m.pager.orderBy[0].column != "id" {
 		t.Fatalf("pager = %#v", m.pager)
 	}
-	if !strings.Contains(m.status, "Page 1") || !strings.Contains(m.status, "2 row(s)") {
+	if !strings.Contains(m.status, "Ready") {
 		t.Fatalf("status = %q", m.status)
 	}
 	if got := m.editor.Value(); got != "SELECT 42;" {
@@ -103,7 +103,7 @@ func TestTablePagination(t *testing.T) {
 	if m.pager.offset != 2 {
 		t.Fatalf("page 2 offset = %d", m.pager.offset)
 	}
-	if !strings.Contains(m.status, "Page 2") {
+	if !strings.Contains(m.status, "Ready") {
 		t.Fatalf("status=%q", m.status)
 	}
 	m.width = 240

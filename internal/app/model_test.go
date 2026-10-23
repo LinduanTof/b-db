@@ -72,7 +72,7 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			return m
 		}
 		switch msg.(type) {
-		case connOpenedMsg, queryDoneMsg, tablePageDoneMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
+		case connOpenedMsg, queryDoneMsg, tablePageDoneMsg, databasesLoadedMsg, exportedMsg, detailLoadedMsg, scriptDoneMsg,
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			editInfoMsg, mutationDoneMsg, celledit.SubmittedMsg, confirm.ConfirmedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
@@ -645,6 +645,84 @@ func TestSidebarHeightExcludesPaneTitle(t *testing.T) {
 	want := m.height - 3 // status bar + menu bar + pane title
 	if len(lines) != want {
 		t.Fatalf("sidebar lines = %d, want %d", len(lines), want)
+	}
+}
+
+func TestPostgresDatabaseDiscovery(t *testing.T) {
+	m := testModel(t, "en")
+	pg := config.Connection{
+		Name:     "pg",
+		Type:     config.TypePostgres,
+		Host:     "h",
+		User:     "u",
+		Password: "p",
+		Database: "bdb",
+		ReadOnly: true,
+	}
+	m.cfg.Connections = append(m.cfg.Connections, pg)
+	m.sidebar.AddConnection(pg)
+	if cmd := m.handleDatabasesLoaded(databasesLoadedMsg{
+		id:        m.connectSeq,
+		base:      "pg",
+		databases: []string{"bdb", "other", "postgres"},
+	}); cmd != nil {
+		t.Fatal("database discovery should not return a command")
+	}
+
+	if m.cfg.Find("pg/bdb") != nil {
+		t.Fatal("current database should keep the base connection name")
+	}
+	for _, name := range []string{"other", "postgres"} {
+		logical := "pg/" + name
+		connection := m.cfg.Find(logical)
+		if connection == nil || connection.Database != name || !connection.ReadOnly {
+			t.Fatalf("connection %q = %#v", logical, connection)
+		}
+	}
+	view := ansi.Strip(m.sidebar.View())
+	for _, want := range []string{"pg", "bdb", "other", "postgres"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("sidebar missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestStatusbarSections(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m.focus = focusResults
+	left := m.statusLeft()
+	for _, want := range []string{"Results", "Query 1", "│"} {
+		if !strings.Contains(left, want) {
+			t.Fatalf("status left = %q, missing %q", left, want)
+		}
+	}
+	if strings.Contains(left, "local-sqlite") {
+		t.Fatalf("status left should not repeat the connection: %q", left)
+	}
+	sidebarView := ansi.Strip(m.sidebar.View())
+	for _, want := range []string{"● local-sqlite", "1 active"} {
+		if !strings.Contains(sidebarView, want) {
+			t.Fatalf("sidebar header = %q, missing %q", sidebarView, want)
+		}
+	}
+	m.setStatus(m.t.T(i18n.KeyStatusReady), false)
+	if right := m.statusRight(); !strings.Contains(right, "✓ Ready") {
+		t.Fatalf("ready right = %q", right)
+	}
+	m.setStatus("boom", true)
+	if right := m.statusRight(); !strings.Contains(right, "✗ boom") {
+		t.Fatalf("error right = %q", right)
+	}
+	m.setStatus("", false)
+	if right := m.statusRight(); right != "" {
+		t.Fatalf("empty right = %q", right)
 	}
 }
 

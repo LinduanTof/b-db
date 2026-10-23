@@ -63,6 +63,13 @@ type tablePageDoneMsg struct {
 	page    *pagination
 }
 
+type databasesLoadedMsg struct {
+	id        uint64
+	base      string
+	databases []string
+	err       error
+}
+
 type editInfo struct {
 	columns []db.Column
 	primary []string
@@ -398,6 +405,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tabSavePending = false
 		_ = m.saveTabStatesNow()
 		return m, nil
+	case databasesLoadedMsg:
+		return m, m.handleDatabasesLoaded(msg)
 	case celledit.SubmittedMsg:
 		return m, m.openUpdateConfirm(msg.Value)
 	case confirm.ConfirmedMsg:
@@ -418,6 +427,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case sidebar.ConnectMsg:
 		return m, m.switchToConnection(msg.Name)
+	case sidebar.DatabaseMsg:
+		return m, m.switchToConnection(msg.Session)
 	case sidebar.SelectTableMsg:
 		return m, m.openTable(msg)
 	case sidebar.TableOpenMsg:
@@ -855,18 +866,108 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	m.editCache = map[string]editInfo{}
 	m.editTarget = editTarget{}
 	m.pager = nil
-	m.setStatus(m.t.T(i18n.KeyStatusConnected, msg.name), false)
+	m.setStatus(m.t.T(i18n.KeyStatusReady), false)
 	m.completer.Reset()
 	m.tableSchemas = map[string]string{}
 	m.completion.Close()
 
-	cmds := []tea.Cmd{m.sidebar.SetConn(m.conn), m.loadCompletionTablesCmd(), m.scheduleTabSave()}
+	cmds := []tea.Cmd{m.sidebarConnCmd(m.conn, msg.name), m.loadCompletionTablesCmd(), m.scheduleTabSave()}
+	if m.conn.Type() == config.TypePostgres {
+		cmds = append(cmds, m.loadDatabasesCmd(sessionBase(msg.name), m.conn))
+	}
 	if m.pendingScript != "" {
 		path := m.pendingScript
 		m.pendingScript = ""
 		cmds = append(cmds, m.runScriptCmd(path))
 	}
 	return tea.Batch(cmds...)
+}
+
+func sessionBase(name string) string {
+	if index := strings.Index(name, "/"); index >= 0 {
+		return name[:index]
+	}
+	return name
+}
+
+func (m *Model) sidebarConnCmd(conn db.Conn, session string) tea.Cmd {
+	if conn.Type() != config.TypePostgres {
+		return m.sidebar.SetConn(conn)
+	}
+	base := sessionBase(session)
+	database := ""
+	if connection := m.cfg.Find(session); connection != nil {
+		database = connection.Database
+	} else if index := strings.Index(session, "/"); index >= 0 {
+		database = session[index+1:]
+	}
+	return m.sidebar.SetDatabaseConn(conn, base, database, session)
+}
+
+func (m *Model) loadDatabasesCmd(base string, conn db.Conn) tea.Cmd {
+	id := m.connectSeq
+	return func() tea.Msg {
+		lister, ok := conn.Catalog().(db.DatabaseLister)
+		if !ok {
+			return databasesLoadedMsg{id: id, base: base}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		names, err := lister.Databases(ctx)
+		return databasesLoadedMsg{id: id, base: base, databases: names, err: err}
+	}
+}
+
+func (m *Model) handleDatabasesLoaded(msg databasesLoadedMsg) tea.Cmd {
+	if msg.id != m.connectSeq {
+		return nil
+	}
+	base := m.cfg.Find(msg.base)
+	if base == nil {
+		return nil
+	}
+	if msg.err != nil {
+		m.setStatus(m.t.T(i18n.KeyErrorCatalog, msg.err), true)
+		return nil
+	}
+
+	entries := make([]sidebar.DatabaseEntry, 0, len(msg.databases)+1)
+	seen := make(map[string]bool, len(msg.databases)+1)
+	add := func(database, session string) {
+		if database == "" || session == "" || seen[database] {
+			return
+		}
+		seen[database] = true
+		entries = append(entries, sidebar.DatabaseEntry{Name: database, Session: session})
+	}
+	for _, database := range msg.databases {
+		if database == "" {
+			continue
+		}
+		if database == base.Database {
+			add(database, msg.base)
+			continue
+		}
+		logical := msg.base + "/" + database
+		clone := *base
+		clone.Name = logical
+		clone.Database = database
+		if existing := m.cfg.Find(logical); existing != nil {
+			*existing = clone
+		} else {
+			m.cfg.Connections = append(m.cfg.Connections, clone)
+		}
+		add(database, logical)
+	}
+	if base.Database != "" {
+		add(base.Database, msg.base)
+	}
+	if current := m.cfg.Find(m.connName); current != nil && current.Database != "" {
+		add(current.Database, m.connName)
+	}
+	m.sidebar.SetDatabases(msg.base, entries)
+	m.syncSidebarSessions()
+	return nil
 }
 
 func (m *Model) runQuery() tea.Cmd {
@@ -1037,7 +1138,7 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 		info = m.t.T(i18n.KeyResultsCount, page.total) + " · " + info
 	}
 	m.results.SetPage(page.stmt, info)
-	m.setStatus(m.t.T(i18n.KeyStatusPage, pageNumber, len(out.Result.Rows), humanDuration(out.Result.Elapsed)), false)
+	m.setStatus(m.t.T(i18n.KeyStatusReady), false)
 	return nil
 }
 
@@ -1353,6 +1454,8 @@ func (m *Model) disconnect() {
 	}
 	m.cancelMutation()
 	m.running = false
+	disconnected := m.connName
+	postgres := m.conn != nil && m.conn.Type() == config.TypePostgres
 	if m.conn != nil {
 		m.conn.Close()
 		m.conn = nil
@@ -1360,6 +1463,18 @@ func (m *Model) disconnect() {
 	if m.connName != "" {
 		m.rememberCurrentTabs()
 		delete(m.sessions, m.connName)
+		if postgres {
+			base := sessionBase(disconnected)
+			for name, saved := range m.sessions {
+				if name != base && !strings.HasPrefix(name, base+"/") {
+					continue
+				}
+				if saved.conn != nil {
+					saved.conn.Close()
+				}
+				delete(m.sessions, name)
+			}
+		}
 	}
 	m.connName = ""
 	m.completer.Reset()
@@ -1380,7 +1495,11 @@ func (m *Model) switchToConnection(name string) tea.Cmd {
 	if saved, ok := m.sessions[name]; ok {
 		m.saveCurrentSession()
 		m.activateSession(name, saved)
-		return m.sidebar.SetConn(saved.conn)
+		cmd := m.sidebarConnCmd(saved.conn, name)
+		if saved.conn.Type() == config.TypePostgres {
+			return tea.Batch(cmd, m.loadDatabasesCmd(sessionBase(name), saved.conn))
+		}
+		return cmd
 	}
 	m.saveCurrentSession()
 	m.resetSession()
@@ -1450,7 +1569,7 @@ func (m *Model) activateSession(name string, saved *session) {
 	m.closeOverlays()
 	m.layout()
 	m.syncSidebarSessions()
-	m.setStatus(m.t.T(i18n.KeyStatusConnected, name), false)
+	m.setStatus(m.t.T(i18n.KeyStatusReady), false)
 }
 
 func (m *Model) resetSession() {

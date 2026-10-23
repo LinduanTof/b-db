@@ -142,6 +142,13 @@ func (m *Model) nextTabTitle() string {
 	return nextTabTitle(m.t, used)
 }
 
+func (m *Model) activeTabTitle() string {
+	if m.activeTab < 0 || m.activeTab >= len(m.tabs) {
+		return ""
+	}
+	return m.tabs[m.activeTab].title
+}
+
 func nextTabTitle(t *i18n.Translator, used map[string]bool) string {
 	for n := 1; ; n++ {
 		title := fmt.Sprintf(t.T(i18n.KeyTabUntitled), n)

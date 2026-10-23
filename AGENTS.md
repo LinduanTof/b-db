@@ -46,6 +46,7 @@ go test ./...     # 需要 testdata/demo.db 已经存在
 - 布局是手动计算的:`layout()` 计算 `sideW`、`rightW`、`editorH`、`resultsH`;终端小于 20x6 时直接返回,小于 40x10 时渲染 "terminal too small" 提示。焦点模式有 `manual`(F2 切换缩放)和 `auto`(缩放跟随焦点,F2 暂停)。
 - 会话保存在 `map[string]*session` 中。切换连接时保存当前编辑器/结果/补全器/编辑缓存/标签/分页状态,并恢复目标会话。任何新的按连接保存的 UI 状态都必须加入 `saveCurrentSession` 和 `activateSession`,否则会在连接之间串数据。
 - 侧栏的活动会话标记由 `syncSidebarSessions` 注入(`sessions` 的 key 加当前连接)。新增连接、断开、切换或重置会话后必须调用它,否则侧栏的 `●`/`◉` 状态和活动数量会过期。
+- PostgreSQL 连接成功后会在连接节点下列出所有数据库,并在内存中克隆出 `<连接名>/<数据库名>` 派生会话;每个数据库是独立会话,展开后加载 schema。派生配置只存在于 `cfg.Connections` 中,不写入运行时连接文件。数据库发现由 `db.DatabaseLister` 可选接口完成,其他驱动无需实现。
 - SQL 编辑器支持按连接隔离的多标签(`tabs.go`);标签内容通过 `tab_state.go` 自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`(0600,临时文件 + rename)。新增标签字段时同步修改 `savedTab`/`savedTabs` 与 `collectTabStates`。
 - 编辑器获得焦点时 `q` 不退出;`Ctrl+C` 始终退出。浮层打开时 `q` 退出,其他按键先交给浮层处理。
 
