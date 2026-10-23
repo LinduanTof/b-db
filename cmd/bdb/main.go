@@ -8,10 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/linduan-guan/b-db/internal/app"
-	"github.com/linduan-guan/b-db/internal/config"
-	"github.com/linduan-guan/b-db/internal/history"
-	"github.com/linduan-guan/b-db/internal/i18n"
+	"github.com/LinduanTof/b-db/internal/app"
+	"github.com/LinduanTof/b-db/internal/config"
+	"github.com/LinduanTof/b-db/internal/history"
+	"github.com/LinduanTof/b-db/internal/i18n"
 )
 
 var version = "dev"
