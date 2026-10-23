@@ -49,6 +49,13 @@ func (driver) Open(_ context.Context, cfg db.Config) (db.Conn, error) {
 		}
 		uri = fmt.Sprintf("mongodb://%s%s/%s", auth, net.JoinHostPort(host, strconv.Itoa(port)), cfg.Get("database"))
 	}
+	if database := strings.TrimSpace(cfg.Get("database")); database != "" {
+		if parsed, err := url.Parse(uri); err == nil && parsed.Scheme != "" {
+			parsed.Path = "/" + database
+			parsed.RawPath = ""
+			uri = parsed.String()
+		}
+	}
 
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	if err != nil {
@@ -81,6 +88,10 @@ func (c *conn) Querier() db.Querier { return querier{c: c} }
 func (c *conn) Mutator() db.Mutator { return nil }
 
 type catalog struct{ c *conn }
+
+func (c catalog) Databases(ctx context.Context) ([]string, error) {
+	return c.Schemas(ctx)
+}
 
 func (c catalog) Schemas(ctx context.Context) ([]string, error) {
 	names, err := c.c.client.ListDatabaseNames(ctx, bson.M{})

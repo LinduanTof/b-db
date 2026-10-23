@@ -121,10 +121,10 @@ func (m *Model) renderMain() string {
 		case focusResults:
 			body = renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.width, mainH)
 		default:
-			body = renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.width, mainH)
+			body = renderPane(m.t.T(i18n.KeyPaneConnections), m.sidebarHint(m.width), m.sidebar.View(), m.width, mainH)
 		}
 	} else {
-		side := renderPane(m.t.T(i18n.KeyPaneConnections), m.t.T(i18n.KeyHintSidebar), m.sidebar.View(), m.sideW, mainH)
+		side := renderPane(m.t.T(i18n.KeyPaneConnections), m.sidebarHint(m.sideW), m.sidebar.View(), m.sideW, mainH)
 		editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
 		resultsView := renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.rightW, m.resultsH)
 		right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
@@ -168,6 +168,16 @@ func (m *Model) renderHelp() string {
 		Padding(1, 2).
 		Render(strings.Join(lines, "\n"))
 	return center(box, m.width, m.height)
+}
+
+func (m *Model) sidebarHint(width int) string {
+	title := m.t.T(i18n.KeyPaneConnections)
+	available := width - textutil.Width(title) - 7
+	full := m.t.T(i18n.KeyHintSidebar)
+	if textutil.Width(full) <= available {
+		return full
+	}
+	return m.t.T(i18n.KeyHintSidebarCompact)
 }
 
 func (m *Model) statusLeft() string {

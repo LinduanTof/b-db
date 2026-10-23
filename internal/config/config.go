@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -190,8 +191,10 @@ func Load(path string) (*Config, []string, error) {
 				return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 			}
 		}
-		if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
-			warnings = append(warnings, fmt.Sprintf("config file %s is readable by other users (mode %04o); consider chmod 600", path, info.Mode().Perm()))
+		if runtime.GOOS != "windows" {
+			if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+				warnings = append(warnings, fmt.Sprintf("config file %s is readable by other users (mode %04o); consider chmod 600", path, info.Mode().Perm()))
+			}
 		}
 	}
 

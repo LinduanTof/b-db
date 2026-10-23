@@ -687,6 +687,111 @@ func TestPostgresDatabaseDiscovery(t *testing.T) {
 	}
 }
 
+func TestMySQLDatabaseDiscovery(t *testing.T) {
+	m := testModel(t, "en")
+	mysql := config.Connection{
+		Name:     "my",
+		Type:     config.TypeMySQL,
+		Host:     "h",
+		User:     "u",
+		Password: "p",
+		ReadOnly: true,
+	}
+	m.cfg.Connections = append(m.cfg.Connections, mysql)
+	m.sidebar.AddConnection(mysql)
+	if cmd := m.handleDatabasesLoaded(databasesLoadedMsg{
+		id:        m.connectSeq,
+		base:      "my",
+		databases: []string{"app", "report"},
+	}); cmd != nil {
+		t.Fatal("database discovery should not return a command")
+	}
+	for _, name := range []string{"app", "report"} {
+		logical := "my/" + name
+		connection := m.cfg.Find(logical)
+		if connection == nil || connection.Database != name || !connection.ReadOnly {
+			t.Fatalf("connection %q = %#v", logical, connection)
+		}
+	}
+	view := ansi.Strip(m.sidebar.View())
+	for _, want := range []string{"my", "app", "report"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("sidebar missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCloseSessionShortcut(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl | tea.ModShift})
+	if m.conn != nil || m.connName != "" {
+		t.Fatalf("session should be closed: conn=%v name=%q", m.conn, m.connName)
+	}
+	if !strings.Contains(m.status, "Disconnected") {
+		t.Fatalf("status = %q", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl | tea.ModShift})
+	if !strings.Contains(m.status, "No connection") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestDisconnectKeepsOtherSessions(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.shutdown()
+
+	data, err := os.ReadFile(m.cfg.Connections[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "second.db")
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m = runCmd(t, m, m.addConnection(config.Connection{
+		Name: "second",
+		Type: config.TypeSQLite,
+		Path: secondPath,
+	}))
+	if m.connName != "second" || m.conn == nil {
+		t.Fatalf("connection = %q, status=%s", m.connName, m.status)
+	}
+
+	m.disconnect()
+	if m.conn != nil || m.connName != "" {
+		t.Fatalf("current session should be closed: conn=%v name=%q", m.conn, m.connName)
+	}
+	if _, ok := m.sessions["local-sqlite"]; !ok {
+		t.Fatal("other sessions should remain open")
+	}
+	if _, ok := m.sessions["second"]; ok {
+		t.Fatal("current session should be removed")
+	}
+
+	m = runCmd(t, m, m.switchToConnection("local-sqlite"))
+	if m.connName != "local-sqlite" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+}
+
+func TestSidebarShortcutHint(t *testing.T) {
+	m := testModel(t, "en")
+	m.layout()
+	if hint := m.sidebarHint(m.sideW); !strings.Contains(hint, "⏎") {
+		t.Fatalf("compact hint = %q", hint)
+	}
+	if content := m.View().Content; !strings.Contains(content, "⏎") {
+		t.Fatalf("sidebar hint missing from view:\n%s", content)
+	}
+	m.width = 200
+	m.layout()
+	if hint := m.sidebarHint(m.sideW); hint != m.t.T(i18n.KeyHintSidebar) {
+		t.Fatalf("wide hint = %q", hint)
+	}
+}
+
 func TestStatusbarSections(t *testing.T) {
 	m := testModel(t, "en")
 	m = connect(t, m)

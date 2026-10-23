@@ -188,9 +188,7 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 	m.connName = conn.Name()
 	m.currentLabel = ""
 	for _, root := range m.roots {
-		root.Children = nil
-		root.Expanded = false
-		root.Loading = false
+		m.deactivateRoot(root)
 	}
 	for _, root := range m.roots {
 		if root.ConnName == conn.Name() {
@@ -204,6 +202,38 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 	return nil
 }
 
+func (m *Model) deactivateRoot(root *Node) {
+	if SupportsDatabases(root.Sub) {
+		for _, child := range root.Children {
+			if child.Kind == KindDatabase {
+				child.Expanded = false
+				child.Loading = false
+				child.Children = nil
+			}
+		}
+		root.Loading = false
+		return
+	}
+	root.Children = nil
+	root.Expanded = false
+	root.Loading = false
+}
+
+// SupportsDatabases reports whether the connection type uses one session per
+// database and shows a database list under the connection.
+func SupportsDatabases(typ string) bool {
+	switch typ {
+	case config.TypePostgres, config.TypeMySQL, config.TypeMongo:
+		return true
+	default:
+		return false
+	}
+}
+
+func databaseIsSchema(typ string) bool {
+	return typ == config.TypeMySQL || typ == config.TypeMongo
+}
+
 func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) tea.Cmd {
 	m.epoch++
 	epoch := m.epoch
@@ -213,16 +243,10 @@ func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) te
 
 	var root *Node
 	for _, candidate := range m.roots {
+		m.deactivateRoot(candidate)
 		candidate.Expanded = candidate.ConnName == base
 		if candidate.ConnName == base {
 			root = candidate
-		}
-		for _, child := range candidate.Children {
-			if child.Kind == KindDatabase {
-				child.Expanded = false
-				child.Loading = false
-				child.Children = nil
-			}
 		}
 	}
 	if root == nil {
@@ -243,11 +267,28 @@ func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) te
 	dbNode.Label = database
 	dbNode.ConnName = session
 	dbNode.SessionName = session
+	dbNode.Schema = database
 	dbNode.Expanded = true
 	dbNode.Loading = true
 	root.Expanded = true
 	m.rebuild()
+	if databaseIsSchema(conn.Type()) {
+		return loadTables(conn, dbNode, epoch)
+	}
 	return loadSchemas(conn, dbNode, epoch)
+}
+
+func (m *Model) SetDatabaseRoot(conn db.Conn, base string) tea.Cmd {
+	m.epoch++
+	m.conn = conn
+	m.connName = base
+	m.currentLabel = ""
+	for _, root := range m.roots {
+		m.deactivateRoot(root)
+		root.Expanded = root.ConnName == base
+	}
+	m.rebuild()
+	return nil
 }
 
 func (m *Model) SetDatabases(base string, entries []DatabaseEntry) {
@@ -281,6 +322,7 @@ func (m *Model) SetDatabases(base string, entries []DatabaseEntry) {
 		node.Label = entry.Name
 		node.ConnName = entry.Session
 		node.SessionName = entry.Session
+		node.Schema = entry.Name
 		if !m.isSessionActive(entry.Session) {
 			node.Expanded = false
 			node.Loading = false
@@ -336,9 +378,7 @@ func (m *Model) ClearConn() {
 	m.connName = ""
 	m.currentLabel = ""
 	for _, root := range m.roots {
-		root.Children = nil
-		root.Expanded = false
-		root.Loading = false
+		m.deactivateRoot(root)
 	}
 	m.rebuild()
 }
@@ -456,6 +496,13 @@ func (m *Model) activate() tea.Cmd {
 	if n == nil {
 		return nil
 	}
+	if n.Kind == KindConnection && SupportsDatabases(n.Sub) {
+		if len(n.Children) == 0 && !m.isCurrentRoot(n.ConnName) {
+			name := n.ConnName
+			return func() tea.Msg { return ConnectMsg{Name: name} }
+		}
+		return m.toggle(n)
+	}
 	if n.Kind == KindConnection && !m.isCurrentRoot(n.ConnName) {
 		name := n.ConnName
 		return func() tea.Msg { return ConnectMsg{Name: name} }
@@ -531,8 +578,8 @@ func (m *Model) move(delta int) {
 }
 
 func (m *Model) toggle(n *Node) tea.Cmd {
-	if n.Kind == KindConnection && n.Sub == config.TypePostgres {
-		if !m.isCurrentRoot(n.ConnName) {
+	if n.Kind == KindConnection && SupportsDatabases(n.Sub) {
+		if len(n.Children) == 0 && !m.isCurrentRoot(n.ConnName) {
 			name := n.ConnName
 			return func() tea.Msg { return ConnectMsg{Name: name} }
 		}
@@ -565,6 +612,9 @@ func (m *Model) toggle(n *Node) tea.Cmd {
 	case KindDatabase:
 		n.Loading = true
 		m.rebuild()
+		if databaseIsSchema(m.conn.Type()) {
+			return loadTables(m.conn, n, m.epoch)
+		}
 		return loadSchemas(m.conn, n, m.epoch)
 	case KindSchema:
 		n.Loading = true
@@ -584,7 +634,7 @@ func (m *Model) reload(n *Node) tea.Cmd {
 		if !m.isCurrentRoot(n.ConnName) {
 			return nil
 		}
-		if n.Sub == config.TypePostgres {
+		if SupportsDatabases(n.Sub) {
 			n.Expanded = true
 			m.rebuild()
 			return nil

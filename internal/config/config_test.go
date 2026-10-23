@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -14,6 +15,23 @@ func writeConfig(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestWarnsOnReadableConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows permission bits do not reflect ACLs")
+	}
+	path := writeConfig(t, "connections: []\n")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, warnings, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "readable by other users") {
+		t.Fatalf("warnings = %v", warnings)
+	}
 }
 
 func TestLoadExpandsEnv(t *testing.T) {

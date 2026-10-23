@@ -655,6 +655,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.toggleZoom()
 		return nil
 	}
+	if key == "ctrl+shift+w" || key == "alt+w" {
+		if m.connName == "" {
+			m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
+			return nil
+		}
+		m.disconnect()
+		return nil
+	}
 	if key == "q" && m.focus != focusEditor {
 		m.shutdown()
 		return tea.Quit
@@ -872,7 +880,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	m.completion.Close()
 
 	cmds := []tea.Cmd{m.sidebarConnCmd(m.conn, msg.name), m.loadCompletionTablesCmd(), m.scheduleTabSave()}
-	if m.conn.Type() == config.TypePostgres {
+	if sidebar.SupportsDatabases(m.conn.Type()) {
 		cmds = append(cmds, m.loadDatabasesCmd(sessionBase(msg.name), m.conn))
 	}
 	if m.pendingScript != "" {
@@ -891,7 +899,7 @@ func sessionBase(name string) string {
 }
 
 func (m *Model) sidebarConnCmd(conn db.Conn, session string) tea.Cmd {
-	if conn.Type() != config.TypePostgres {
+	if !sidebar.SupportsDatabases(conn.Type()) {
 		return m.sidebar.SetConn(conn)
 	}
 	base := sessionBase(session)
@@ -900,6 +908,9 @@ func (m *Model) sidebarConnCmd(conn db.Conn, session string) tea.Cmd {
 		database = connection.Database
 	} else if index := strings.Index(session, "/"); index >= 0 {
 		database = session[index+1:]
+	}
+	if database == "" {
+		return m.sidebar.SetDatabaseRoot(conn, base)
 	}
 	return m.sidebar.SetDatabaseConn(conn, base, database, session)
 }
@@ -1454,8 +1465,6 @@ func (m *Model) disconnect() {
 	}
 	m.cancelMutation()
 	m.running = false
-	disconnected := m.connName
-	postgres := m.conn != nil && m.conn.Type() == config.TypePostgres
 	if m.conn != nil {
 		m.conn.Close()
 		m.conn = nil
@@ -1463,18 +1472,6 @@ func (m *Model) disconnect() {
 	if m.connName != "" {
 		m.rememberCurrentTabs()
 		delete(m.sessions, m.connName)
-		if postgres {
-			base := sessionBase(disconnected)
-			for name, saved := range m.sessions {
-				if name != base && !strings.HasPrefix(name, base+"/") {
-					continue
-				}
-				if saved.conn != nil {
-					saved.conn.Close()
-				}
-				delete(m.sessions, name)
-			}
-		}
 	}
 	m.connName = ""
 	m.completer.Reset()

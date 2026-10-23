@@ -30,6 +30,7 @@ const (
 	KeyTabUntitled         = "tab.untitled"
 
 	KeyHintSidebar        = "hint.sidebar"
+	KeyHintSidebarCompact = "hint.sidebar.compact"
 	KeyHintEditor         = "hint.editor"
 	KeyHintResults        = "hint.results"
 	KeyMenuBarHint        = "menu.bar"

@@ -137,6 +137,33 @@ func TestTableSingleClickSelectsDoubleClickOpens(t *testing.T) {
 	}
 }
 
+func TestMySQLDatabaseTree(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "my", Type: config.TypeMySQL, Host: "h", User: "u"},
+	}, i18n.New("en"))
+	m.SetSize(40, 12)
+	m.SetDatabases("my", []DatabaseEntry{
+		{Name: "app", Session: "my/app"},
+		{Name: "report", Session: "my/report"},
+	})
+	if cmd := m.SetDatabaseConn(fakeConn{name: "my/app", typ: config.TypeMySQL}, "my", "app", "my/app"); cmd == nil {
+		t.Fatal("selecting a MySQL database should load its tables")
+	}
+	var database *Node
+	for _, node := range m.roots[0].Children {
+		if node.Kind == KindDatabase && node.Label == "app" {
+			database = node
+		}
+	}
+	if database == nil || database.Schema != "app" || !database.Expanded {
+		t.Fatalf("database node = %#v", database)
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "▾ ● ▤ app") || !strings.Contains(view, "▸ ○ ▤ report") {
+		t.Fatalf("view missing database tree:\n%s", view)
+	}
+}
+
 func TestNoConnectionsShowsConfigPath(t *testing.T) {
 	m := New(nil, i18n.New("en"))
 	m.SetSize(80, 10)
