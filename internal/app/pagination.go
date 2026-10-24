@@ -43,7 +43,7 @@ func (m *Model) runPageQuery(pager *pagination) tea.Cmd {
 		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
 		return nil
 	}
-	m.context = contextData
+	m.setContext(contextData)
 	page := *pager
 	if page.size <= 0 {
 		page.size = 1

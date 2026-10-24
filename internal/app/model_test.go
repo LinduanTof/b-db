@@ -1920,3 +1920,36 @@ func TestOverviewSchemaColumn(t *testing.T) {
 		}
 	}
 }
+
+func TestOverviewEnterOpensTableData(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.connName = "local-sqlite/main"
+	m = runCmd(t, m, m.loadOverviewCmd())
+	m.focus = focusResults
+
+	row, ok := m.results.CursorRow()
+	if !ok || len(row) < 2 {
+		t.Fatalf("overview cursor row = %#v", row)
+	}
+	want, _ := row[1].(string)
+	if want == "" {
+		t.Fatalf("overview cursor row = %#v", row)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.context != contextData {
+		t.Fatalf("context = %v, want data", m.context)
+	}
+	if m.pager == nil || m.pager.table != want {
+		t.Fatalf("pager table = %#v, want %q", m.pager, want)
+	}
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v", m.focus)
+	}
+}

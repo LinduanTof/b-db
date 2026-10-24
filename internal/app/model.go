@@ -826,6 +826,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		case "ctrl+m":
 			return m.exportCmd("md")
 		case "enter", "v":
+			if m.context == contextTables {
+				return m.openOverviewTable()
+			}
 			text := m.results.CursorText()
 			if text == "" {
 				return nil
@@ -1084,12 +1087,12 @@ func (m *Model) runQuery() tea.Cmd {
 		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
 		return nil
 	}
-	m.context = contextQuery
+	m.setContext(contextQuery)
 	return m.runStatement(stmt, true, 0)
 }
 
 func (m *Model) runTableCommand(stmt string) tea.Cmd {
-	m.context = contextData
+	m.setContext(contextData)
 	return m.runStatement(stmt, false, max(1, m.cfg.Query.MaxRows))
 }
 
@@ -1255,7 +1258,7 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 func (m *Model) activateTable(schema, table, kind string) tea.Cmd {
 	cmd := m.openTableTab(schema, table, kind)
 	if m.conn != nil && (m.conn.Type() == "redis" || m.conn.Type() == "mongo") {
-		m.context = contextData
+		m.setContext(contextData)
 		return cmd
 	}
 	return tea.Batch(cmd, m.tableData(schema, table))
@@ -1379,7 +1382,7 @@ func (m *Model) renderConnectionInfo() {
 		Rows: rows,
 	})
 	m.pager = nil
-	m.context = contextInfo
+	m.setContext(contextInfo)
 }
 
 func (m *Model) versionCmd() tea.Cmd {
@@ -1570,7 +1573,7 @@ func (m *Model) rebuildOverview() {
 	}
 	m.results.SetResult(&db.ResultSet{Columns: m.overviewColumns(), Rows: display})
 	m.pager = nil
-	m.context = contextTables
+	m.setContext(contextTables)
 	m.setStatus(m.t.T(i18n.KeyStatusTables, len(rows)), false)
 }
 
@@ -1584,6 +1587,35 @@ func (m *Model) resetOverviewState() {
 	m.filterInput.Blur()
 }
 
+func (m *Model) setContext(kind contextKind) {
+	m.context = kind
+	m.results.SetRowMode(kind == contextTables)
+}
+
+func (m *Model) openOverviewTable() tea.Cmd {
+	row, ok := m.results.CursorRow()
+	if !ok || m.conn == nil || len(row) < 2 {
+		return nil
+	}
+	var schema, table, kind string
+	if typeHasSchema(m.conn.Type()) {
+		if len(row) < 3 {
+			return nil
+		}
+		schema, _ = row[0].(string)
+		table, _ = row[1].(string)
+		kind, _ = row[2].(string)
+	} else {
+		schema = sessionDatabase(m.connName)
+		table, _ = row[0].(string)
+		kind, _ = row[1].(string)
+	}
+	if table == "" {
+		return nil
+	}
+	return m.openTableData(schema, table, kind)
+}
+
 func (m *Model) handleOverviewLoaded(msg overviewLoadedMsg) tea.Cmd {
 	if msg.id != m.overviewSeq {
 		return nil
@@ -1592,7 +1624,7 @@ func (m *Model) handleOverviewLoaded(msg overviewLoadedMsg) tea.Cmd {
 		m.overviewAll = nil
 		m.results.SetError(m.t.T(i18n.KeyErrorOverview, msg.err))
 		m.pager = nil
-		m.context = contextTables
+		m.setContext(contextTables)
 		m.setStatus(m.t.T(i18n.KeyErrorOverview, msg.err), true)
 		return nil
 	}
@@ -1907,7 +1939,7 @@ func (m *Model) disconnect() {
 	m.tableSchemas = map[string]string{}
 	m.editCache = map[string]editInfo{}
 	m.pager = nil
-	m.context = contextQuery
+	m.setContext(contextQuery)
 	m.resetOverviewState()
 	m.sidebar.ClearConn()
 	m.results.Clear()
@@ -1984,7 +2016,7 @@ func (m *Model) activateSession(name string, saved *session) {
 	m.tableSchemas = saved.tableSchemas
 	m.editCache = saved.editCache
 	m.pager = saved.pager
-	m.context = saved.context
+	m.setContext(saved.context)
 	if len(saved.tabs) > 0 {
 		m.tabs = append([]editorTab(nil), saved.tabs...)
 		m.activeTab = saved.activeTab
@@ -2024,7 +2056,7 @@ func (m *Model) resetSession() {
 	m.running = false
 	m.pendingCmd = nil
 	m.tabConnName = ""
-	m.context = contextQuery
+	m.setContext(contextQuery)
 	m.resetOverviewState()
 	m.resetTabs()
 	m.results = results.New(m.t)
@@ -2244,7 +2276,7 @@ func (m *Model) handleScriptDone(msg scriptDoneMsg) {
 	} else if msg.exec != nil {
 		m.results.SetExec(msg.exec.Affected, msg.exec.Elapsed)
 	}
-	m.context = contextQuery
+	m.setContext(contextQuery)
 	m.pager = nil
 	m.setStatus(m.t.T(i18n.KeyStatusScript, msg.executed, msg.total, humanDuration(msg.elapsed)), false)
 }
