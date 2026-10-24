@@ -51,6 +51,8 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type Config struct {
+	// Deprecated: kept so existing config files still load. bdb no longer
+	// connects automatically on startup.
 	DefaultConnection string       `yaml:"default_connection"`
 	UI                UIConfig     `yaml:"ui"`
 	Query             QueryConfig  `yaml:"query"`
@@ -106,8 +108,6 @@ func DefaultPath() string {
 
 const defaultConfigTemplate = `# bdb configuration
 # Add connections here, or press "a" inside bdb to add one.
-
-default_connection: ""
 
 ui:
   language: auto

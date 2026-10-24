@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -215,6 +216,8 @@ type Model struct {
 	connectSeq     uint64
 	cancel         context.CancelFunc
 	mutationCancel context.CancelFunc
+	connectCancel  context.CancelFunc
+	quitting       atomic.Bool
 	running        bool
 
 	status    string
@@ -277,18 +280,10 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	if wd, err := os.Getwd(); err == nil {
 		m.outDir = wd
 	}
-	if cfg.DefaultConnection != "" {
-		m.setStatus(t.T(i18n.KeyStatusConnecting, cfg.DefaultConnection), false)
-	}
 	return m
 }
 
-func (m *Model) Init() tea.Cmd {
-	if name := m.cfg.DefaultConnection; name != "" {
-		return m.connectCmd(name)
-	}
-	return nil
-}
+func (m *Model) Init() tea.Cmd { return nil }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -825,15 +820,20 @@ func (m *Model) toggleZoom() {
 func (m *Model) connectCmd(name string) tea.Cmd {
 	m.connectSeq++
 	id := m.connectSeq
+	if m.connectCancel != nil {
+		m.connectCancel()
+		m.connectCancel = nil
+	}
 	connCfg := m.cfg.Find(name)
 	if connCfg == nil {
 		return func() tea.Msg {
 			return connOpenedMsg{id: id, name: name, err: fmt.Errorf("connection %q not found", name)}
 		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	m.connectCancel = cancel
 	m.setStatus(m.t.T(i18n.KeyStatusConnecting, name), false)
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		conn, err := db.Open(ctx, toDBConfig(connCfg))
 		if err != nil {
@@ -842,6 +842,12 @@ func (m *Model) connectCmd(name string) tea.Cmd {
 		if err := conn.Ping(ctx); err != nil {
 			conn.Close()
 			return connOpenedMsg{id: id, name: name, err: err}
+		}
+		// The program may have exited while the connection was being
+		// established; nobody would receive the message, so close it here.
+		if m.quitting.Load() {
+			conn.Close()
+			return connOpenedMsg{id: id, name: name, err: context.Canceled}
 		}
 		return connOpenedMsg{id: id, name: name, conn: conn}
 	}
@@ -1893,7 +1899,12 @@ func (m *Model) loadCompletionTablesCmd() tea.Cmd {
 }
 
 func (m *Model) shutdown() {
+	m.quitting.Store(true)
 	m.connectSeq++
+	if m.connectCancel != nil {
+		m.connectCancel()
+		m.connectCancel = nil
+	}
 	_ = m.saveTabStatesNow()
 	if m.cancel != nil {
 		m.cancel()
@@ -1914,6 +1925,10 @@ func (m *Model) shutdown() {
 		_ = store.Save()
 	}
 }
+
+// Shutdown closes every open session and database connection. It is safe to
+// call after the Bubble Tea program has exited, and more than once.
+func (m *Model) Shutdown() { m.shutdown() }
 
 func (m *Model) addConnection(conn config.Connection) tea.Cmd {
 	if m.cfg.Find(conn.Name) != nil {

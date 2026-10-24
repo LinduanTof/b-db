@@ -21,7 +21,6 @@ make build
 配置文件最小示例：
 
 ```yaml
-default_connection: local
 ui:
   language: auto          # auto | en | zh
   theme: default          # default | dracula | gruvbox | nord | catppuccin | solarized-light

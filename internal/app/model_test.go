@@ -1613,3 +1613,41 @@ func TestStaleConnectionResponseIgnored(t *testing.T) {
 		t.Fatalf("stale response changed status to %q", m.status)
 	}
 }
+
+func TestInitDoesNotAutoConnect(t *testing.T) {
+	m := testModel(t, "en")
+	if cmd := m.Init(); cmd != nil {
+		t.Fatal("Init should not connect automatically")
+	}
+}
+
+func TestShutdownClosesAllSessions(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	current := m.conn
+
+	background, err := db.Open(context.Background(), db.Config{
+		Name:   "background",
+		Type:   "sqlite",
+		Params: map[string]string{"path": ":memory:"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := background.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["background"] = &session{conn: background}
+
+	m.Shutdown()
+	m.Shutdown() // must be safe to call twice
+
+	for name, conn := range map[string]db.Conn{"current": current, "background": background} {
+		if err := conn.Ping(context.Background()); err == nil {
+			t.Fatalf("%s connection is still open after Shutdown", name)
+		}
+	}
+	if len(m.sessions) != 0 {
+		t.Fatalf("sessions = %d after Shutdown, want 0", len(m.sessions))
+	}
+}
