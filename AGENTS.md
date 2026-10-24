@@ -86,7 +86,7 @@ func (m *Model) View() string
 - `${ENV_VAR}` 展开适用于大多数连接字符串字段;变量缺失时会报错并指出连接名与字段,不会静默使用空字符串。
 - 运行时连接仅在主配置中不存在同名连接时才合并;新增数据源会保存原始 `${VAR}` 引用,但当前会话使用展开后的副本连接。
 - 状态文件使用 `0600` 权限和临时文件 + rename 的原子写入方式。新增持久化数据时沿用该模式。
-- 校验按连接类型检查必填项(host/user/database/path/addr/uri),拒绝重名,并要求 `default_connection` 存在。
+- 校验按连接类型检查必填项(PostgreSQL/MySQL 的 host、user,SQLite 的 path,Redis 的 addr,Mongo 的 uri/host;PostgreSQL 的 database 可省略,默认连 `postgres` 库),拒绝重名;`default_connection` 字段仅为兼容旧配置保留,启动时不再自动连接。
 - 新增配置字段需要同步修改 `config.Config`/相关结构体、`applyDefaults`、必要的校验、`config.example.yaml`,以及 `config.go` 中的默认配置模板。YAML 使用 `KnownFields(true)`,未知字段会直接报错。
 
 ### i18n 与主题

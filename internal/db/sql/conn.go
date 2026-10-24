@@ -40,11 +40,15 @@ func (pgDriver) Open(_ context.Context, cfg db.Config) (db.Conn, error) {
 	if sslMode == "" {
 		sslMode = "prefer"
 	}
+	database := cfg.Get("database")
+	if database == "" {
+		database = "postgres"
+	}
 	u := &url.URL{
 		Scheme: "postgres",
 		User:   url.UserPassword(cfg.Get("user"), cfg.Get("password")),
 		Host:   net.JoinHostPort(cfg.Get("host"), strconv.Itoa(port)),
-		Path:   "/" + cfg.Get("database"),
+		Path:   "/" + database,
 	}
 	q := u.Query()
 	q.Set("sslmode", sslMode)

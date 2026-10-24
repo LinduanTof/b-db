@@ -116,7 +116,7 @@ connections:
   - {name: pg, type: postgres, host: localhost}
 `)
 	_, _, err := Load(path)
-	if err == nil || !strings.Contains(err.Error(), "host, user and database") {
+	if err == nil || !strings.Contains(err.Error(), "host and user") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -156,6 +156,15 @@ func TestMySQLDatabaseOptional(t *testing.T) {
 	}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("mysql without database should be valid: %v", err)
+	}
+}
+
+func TestPostgresDatabaseOptional(t *testing.T) {
+	cfg := &Config{Connections: []Connection{
+		{Name: "pg", Type: TypePostgres, Host: "127.0.0.1", User: "postgres"},
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("postgres without database should be valid: %v", err)
 	}
 }
 

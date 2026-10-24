@@ -304,8 +304,8 @@ func (c Connection) validate() error {
 	}
 	switch c.Type {
 	case TypePostgres:
-		if c.Host == "" || c.User == "" || c.Database == "" {
-			return fmt.Errorf("host, user and database are required for postgres")
+		if c.Host == "" || c.User == "" {
+			return fmt.Errorf("host and user are required for postgres")
 		}
 	case TypeMySQL:
 		if c.Host == "" || c.User == "" {

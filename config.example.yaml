@@ -17,6 +17,8 @@ connections:
 
   # PostgreSQL example. ${PG_PASSWORD} must be set before starting bdb;
   # a missing variable is reported as an error instead of silently using "".
+  # PostgreSQL (supported). database is optional and defaults to "postgres";
+  # all databases are still listed in the sidebar after connecting.
   # - name: local-pg
   #   type: postgres
   #   host: 127.0.0.1

@@ -49,7 +49,7 @@ connections:
     database: bdb
 ```
 
-`password` 等字段支持 `${ENV_VAR}` 引用；变量未设置时启动会报错并指出连接名与字段，不会静默使用空字符串。建议 `chmod 600` 配置文件。
+`password` 等字段支持 `${ENV_VAR}` 引用；变量未设置时启动会报错并指出连接名与字段，不会静默使用空字符串。建议 `chmod 600` 配置文件。PostgreSQL 的 `database` 可省略，省略时连接到 `postgres` 库，连上后仍可在侧栏浏览所有数据库。
 
 ## 快捷键
 
