@@ -4,16 +4,41 @@
 
 已完成：PostgreSQL/MySQL/SQLite 浏览与查询、事务化数据编辑、Redis/MongoDB、多会话、表结构/DDL/索引、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、6 套主题、SQL 语法高亮与自动补全、专注布局与鼠标操作。
 
-## 快速开始
+## 安装
 
 要求 Go 1.26+。
 
+### go install
+
 ```bash
 go install github.com/LinduanTof/b-db/cmd/bdb@latest
-# 或本地构建
+```
+
+安装指定版本：
+
+```bash
+go install github.com/LinduanTof/b-db/cmd/bdb@v0.3.0
+```
+
+二进制默认安装到 `$(go env GOPATH)/bin`（设置了 `GOBIN` 时使用该目录）。确保它在 `PATH` 中：
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+bdb --version
+```
+
+### 从源码构建
+
+```bash
 make demo-db     # 生成 SQLite 示例库 testdata/demo.db
-make build
-./bin/bdb --config config.example.yaml
+make build       # 输出 bin/bdb
+```
+
+## 快速开始
+
+```bash
+bdb --config config.example.yaml            # go install 安装的二进制
+./bin/bdb --config config.example.yaml      # 从源码构建的二进制
 ```
 
 默认配置文件路径为 `$XDG_CONFIG_HOME/bdb/config.yaml`（通常是 `~/.config/bdb/config.yaml`），可用 `--config` 覆盖。首次启动时若文件不存在，会自动创建一份带注释的默认模板（权限 `0600`），不会覆盖已有文件。
