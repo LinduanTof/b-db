@@ -116,6 +116,13 @@ type exportedMsg struct {
 	err  error
 }
 
+type exportProgressMsg struct {
+	label string
+	done  int
+	total int
+	rows  int64
+}
+
 type detailLoadedMsg struct {
 	id      uint64
 	title   string
@@ -209,9 +216,7 @@ type Model struct {
 	tabSaveGen     uint64
 	tabSavePending bool
 
-	tableMenuSchema string
-	tableMenuTable  string
-	tableMenuKind   string
+	menuNode sidebar.NodeMenuMsg
 
 	completer    *ac.Engine
 	tableSchemas map[string]string
@@ -222,10 +227,13 @@ type Model struct {
 
 	width, height                    int
 	sideW, rightW, editorH, resultsH int
+	editorW, resultsW                int
+	columnsActive                    bool
 
 	focus focus
 
 	focusMode  string
+	layoutMode string
 	zoom       bool
 	autoPaused bool
 
@@ -248,6 +256,8 @@ type Model struct {
 	showHelp  bool
 	context   contextKind
 	outDir    string
+	send      func(tea.Msg)
+	exporting bool
 
 	infoName    string
 	infoStatus  string
@@ -291,6 +301,10 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.focusMode = cfg.UI.FocusMode
 	if m.focusMode != config.FocusModeAuto {
 		m.focusMode = config.FocusModeManual
+	}
+	m.layoutMode = config.NormalizeLayout(cfg.UI.Layout)
+	if saved := config.LoadLayoutState(); saved != "" {
+		m.layoutMode = config.NormalizeLayout(saved)
 	}
 	if err := config.MergeRuntime(cfg); err != nil {
 		m.setStatus(t.T(i18n.KeyErrorLoadConnections, err), true)
@@ -347,16 +361,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		return m, m.handleMouseWheel(msg)
 	case menu.ActionMsg:
-		if strings.HasPrefix(msg.ID, "table.") {
+		switch {
+		case strings.HasPrefix(msg.ID, "table."):
 			return m, m.runTableMenuAction(msg)
+		case strings.HasPrefix(msg.ID, "conn."), strings.HasPrefix(msg.ID, "db."):
+			return m, m.runNodeMenuAction(msg)
+		default:
+			return m, m.runMenuAction(msg)
 		}
-		return m, m.runMenuAction(msg)
 	case menu.ChangedMsg:
 		m.applyMenuChange(msg)
 		return m, nil
-	case sidebar.TableMenuMsg:
-		m.tableMenuSchema, m.tableMenuTable, m.tableMenuKind = msg.Schema, msg.Table, msg.Kind
-		m.tableMenu.Open(qualifiedTable(msg.Schema, msg.Table), m.tableMenuItems())
+	case sidebar.NodeMenuMsg:
+		m.menuNode = msg
+		m.tableMenu.Open(m.nodeMenuTitle(msg), m.nodeMenuItems(msg))
 		return m, nil
 	case ddlLoadedMsg:
 		if msg.id != m.connectSeq {
@@ -455,10 +473,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case mutationDoneMsg:
 		return m, m.handleMutationDone(msg)
 	case exportedMsg:
+		m.exporting = false
 		if msg.err != nil {
 			m.setStatus(m.t.T(i18n.KeyErrorExport, msg.err), true)
 		} else {
 			m.setStatus(m.t.T(i18n.KeyStatusExported, msg.path), false)
+		}
+		return m, nil
+	case exportProgressMsg:
+		m.exporting = true
+		switch {
+		case msg.rows > 0:
+			m.setStatus(m.t.T(i18n.KeyStatusExportingRows, msg.label, msg.rows), false)
+		case msg.total > 0:
+			m.setStatus(m.t.T(i18n.KeyStatusExportingCount, msg.label, msg.done, msg.total), false)
+		default:
+			m.setStatus(m.t.T(i18n.KeyStatusExporting, msg.label), false)
 		}
 		return m, nil
 	case sidebar.ConnectMsg:
@@ -1733,15 +1763,130 @@ func (m *Model) tableMenuItems() []menu.Item {
 	}
 }
 
+func (m *Model) tableMenuItemsWithExport() []menu.Item {
+	items := m.tableMenuItems()
+	if m.conn != nil && sqlExportable(m.conn.Type()) {
+		items = append(items, exportMenuItems("table")...)
+	}
+	return items
+}
+
+func (m *Model) nodeMenuTitle(n sidebar.NodeMenuMsg) string {
+	switch n.Kind {
+	case sidebar.KindConnection:
+		return n.ConnName
+	case sidebar.KindDatabase:
+		return n.Label
+	default:
+		return qualifiedTable(n.Schema, n.Table)
+	}
+}
+
+func (m *Model) nodeMenuItems(n sidebar.NodeMenuMsg) []menu.Item {
+	switch n.Kind {
+	case sidebar.KindConnection:
+		if n.ConnName != sessionBase(m.connName) {
+			return []menu.Item{
+				{ID: "conn.connect", LabelKey: i18n.KeyMenuConnect, Kind: menu.KindAction},
+			}
+		}
+		return []menu.Item{
+			{ID: "conn.info", LabelKey: i18n.KeyMenuInfo, Kind: menu.KindAction},
+			{ID: "conn.refresh", LabelKey: i18n.KeyMenuRefresh, Kind: menu.KindAction},
+			{ID: "conn.disconnect", LabelKey: i18n.KeyMenuDisconnect, Kind: menu.KindAction},
+		}
+	case sidebar.KindDatabase:
+		items := []menu.Item{
+			{ID: "db.open", LabelKey: i18n.KeyMenuOpen, Kind: menu.KindAction},
+			{ID: "db.refresh", LabelKey: i18n.KeyMenuRefresh, Kind: menu.KindAction},
+			{ID: "db.close", LabelKey: i18n.KeyMenuCloseSession, Kind: menu.KindAction},
+		}
+		if sqlExportable(m.sessionType(n.SessionName)) {
+			items = append(items, exportMenuItems("db")...)
+		}
+		return items
+	default:
+		return m.tableMenuItemsWithExport()
+	}
+}
+
+func (m *Model) sessionType(session string) string {
+	if cfg := m.cfg.Find(session); cfg != nil {
+		return cfg.Type
+	}
+	if m.conn != nil {
+		return m.conn.Type()
+	}
+	return ""
+}
+
+func exportMenuItems(prefix string) []menu.Item {
+	return []menu.Item{
+		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuExport},
+		{ID: prefix + ".export.sql", LabelKey: i18n.KeyMenuExportSQL, Kind: menu.KindAction},
+		{ID: prefix + ".export.ddl", LabelKey: i18n.KeyMenuExportDDL, Kind: menu.KindAction},
+		{ID: prefix + ".export.xlsx", LabelKey: i18n.KeyMenuExportXLSX, Kind: menu.KindAction},
+		{ID: prefix + ".export.csv", LabelKey: i18n.KeyMenuExportCSV, Kind: menu.KindAction},
+		{ID: prefix + ".export.json", LabelKey: i18n.KeyMenuExportJSON, Kind: menu.KindAction},
+	}
+}
+
+func (m *Model) runNodeMenuAction(msg menu.ActionMsg) tea.Cmd {
+	n := m.menuNode
+	if strings.HasPrefix(msg.ID, "db.export.") {
+		return m.exportDatabaseCmd(n.SessionName, strings.TrimPrefix(msg.ID, "db.export."))
+	}
+	switch msg.ID {
+	case "conn.connect":
+		return m.switchToConnection(n.ConnName)
+	case "conn.info":
+		return m.showConnectionInfo(n.ConnName, m.t.T(i18n.KeyStatusConnected))
+	case "conn.refresh", "db.refresh":
+		return m.sidebar.ReloadSelected()
+	case "conn.disconnect":
+		m.disconnect()
+		return nil
+	case "db.open":
+		if n.SessionName == m.connName {
+			return m.loadOverviewCmd()
+		}
+		return m.switchToConnection(n.SessionName)
+	case "db.close":
+		m.closeSession(n.SessionName)
+		return nil
+	}
+	return nil
+}
+
+func (m *Model) closeSession(name string) {
+	if name == "" {
+		return
+	}
+	if name == m.connName {
+		m.disconnect()
+		return
+	}
+	if saved, ok := m.sessions[name]; ok {
+		_ = saved.conn.Close()
+		delete(m.sessions, name)
+	}
+	m.syncSidebarSessions()
+	m.setStatus(m.t.T(i18n.KeyStatusSessionClosed, name), false)
+}
+
 func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
-	schema, table := m.tableMenuSchema, m.tableMenuTable
+	schema, table := m.menuNode.Schema, m.menuNode.Table
+	kind := m.menuNode.Sub
+	if strings.HasPrefix(msg.ID, "table.export.") {
+		return m.exportTableCmd(schema, table, strings.TrimPrefix(msg.ID, "table.export."))
+	}
 	if msg.ID == "table.data" {
-		return m.openTableData(schema, table, m.tableMenuKind)
+		return m.openTableData(schema, table, kind)
 	}
 	if m.conn != nil && m.conn.Type() == "redis" {
 		switch msg.ID {
 		case "table.select":
-			return m.openTableTab(schema, table, m.tableMenuKind)
+			return m.openTableTab(schema, table, kind)
 		}
 		m.setStatus(m.t.T(i18n.KeyErrorUnsupportedFeature, "redis"), true)
 		return nil
@@ -1749,12 +1894,12 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	if m.conn != nil && m.conn.Type() == "mongo" {
 		switch msg.ID {
 		case "table.select":
-			return m.openTableTab(schema, table, m.tableMenuKind)
+			return m.openTableTab(schema, table, kind)
 		}
 	}
 	switch msg.ID {
 	case "table.select":
-		return m.openTableTab(schema, table, m.tableMenuKind)
+		return m.openTableTab(schema, table, kind)
 	case "table.structure":
 		return m.openDetail(schema, table)
 	case "table.ddl":
@@ -1904,6 +2049,15 @@ func (m *Model) applyMenuChange(msg menu.ChangedMsg) {
 		m.cfg.Query.MaxRows = values[msg.Value]
 		m.executor.MaxRows = values[msg.Value]
 		m.setStatus(m.t.T(i18n.KeyStatusMaxRowsSet, values[msg.Value]), false)
+	case "layout":
+		names := m.layoutNames()
+		if msg.Value < 0 || msg.Value >= len(names) {
+			return
+		}
+		m.layoutMode = names[msg.Value]
+		_ = config.SaveLayoutState(m.layoutMode)
+		m.layout()
+		m.setStatus(m.t.T(i18n.KeyStatusLayout, m.layoutLabels()[msg.Value]), false)
 	}
 }
 
@@ -2113,6 +2267,14 @@ func (m *Model) menuItems() []menu.Item {
 			break
 		}
 	}
+	layoutNames := m.layoutNames()
+	layoutValue := 0
+	for i, name := range layoutNames {
+		if name == m.layoutMode {
+			layoutValue = i
+			break
+		}
+	}
 
 	return []menu.Item{
 		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuActions},
@@ -2127,9 +2289,22 @@ func (m *Model) menuItems() []menu.Item {
 		{ID: "lang", LabelKey: i18n.KeyMenuLanguage, Kind: menu.KindChoice, Choices: langs, Value: langValue},
 		{ID: "timeout", LabelKey: i18n.KeyMenuTimeout, Kind: menu.KindChoice, Choices: timeoutLabels(), Value: timeoutValue},
 		{ID: "maxrows", LabelKey: i18n.KeyMenuMaxRows, Kind: menu.KindChoice, Choices: maxRowLabels(), Value: rowValue},
+		{ID: "layout", LabelKey: i18n.KeyMenuLayoutMode, Kind: menu.KindChoice, Choices: m.layoutLabels(), Value: layoutValue},
 		{ID: "zoom", LabelKey: i18n.KeyMenuLayout, Kind: menu.KindAction},
 		{Kind: menu.KindHeader},
 		{ID: "quit", LabelKey: i18n.KeyCmdQuit, Kind: menu.KindAction},
+	}
+}
+
+func (m *Model) layoutNames() []string {
+	return []string{config.LayoutStacked, config.LayoutColumns, config.LayoutResultsTop}
+}
+
+func (m *Model) layoutLabels() []string {
+	return []string{
+		m.t.T(i18n.KeyLayoutStacked),
+		m.t.T(i18n.KeyLayoutColumns),
+		m.t.T(i18n.KeyLayoutResultsTop),
 	}
 }
 
@@ -2285,6 +2460,10 @@ func (m *Model) SetHistory(store *history.Store) {
 	m.history = store
 	m.editor.SetHistory(store.Entries())
 }
+
+// SetSender connects the model to the Bubble Tea program so background work
+// can report progress.
+func (m *Model) SetSender(send func(tea.Msg)) { m.send = send }
 
 func (m *Model) SetInitialScript(path string) { m.pendingScript = path }
 

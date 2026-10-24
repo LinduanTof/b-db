@@ -87,9 +87,25 @@ type TableStatProvider interface {
 	TableStats(ctx context.Context, schema string) ([]TableStat, error)
 }
 
+// Querier executes statements and buffers the whole result.
 type Querier interface {
 	Query(ctx context.Context, stmt string, maxRows int) (*ResultSet, error)
 	Exec(ctx context.Context, stmt string) (*ExecResult, error)
+}
+
+// RowStream is a forward-only cursor over query results. Callers must Close
+// it. It lets large results be exported without buffering every row.
+type RowStream interface {
+	Columns() []ColumnMeta
+	Next() bool
+	Values() ([]any, error)
+	Err() error
+	Close() error
+}
+
+// Streamer is implemented by connections that can stream rows.
+type Streamer interface {
+	Stream(ctx context.Context, stmt string, maxRows int) (RowStream, error)
 }
 
 type Object struct {

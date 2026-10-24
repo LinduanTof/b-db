@@ -224,7 +224,7 @@ func TestTableKeys(t *testing.T) {
 	}
 
 	check(tea.KeyPressMsg{Code: 's'}, func(msg tea.Msg) bool { _, ok := msg.(TableOpenMsg); return ok })
-	check(tea.KeyPressMsg{Code: 'm'}, func(msg tea.Msg) bool { _, ok := msg.(TableMenuMsg); return ok })
+	check(tea.KeyPressMsg{Code: 'm'}, func(msg tea.Msg) bool { _, ok := msg.(NodeMenuMsg); return ok })
 	check(tea.KeyPressMsg{Code: 'o'}, func(msg tea.Msg) bool { _, ok := msg.(EditorOpenMsg); return ok })
 	check(tea.KeyPressMsg{Code: tea.KeyEnter}, func(msg tea.Msg) bool { _, ok := msg.(TableActivateMsg); return ok })
 }

@@ -75,9 +75,17 @@ type EditorOpenMsg struct{ Schema, Table, Kind string }
 
 type ConnectionInfoMsg struct{ Name string }
 
-type TableMenuMsg struct{ Schema, Table, Kind string }
-
 type TableOpenMsg struct{ Schema, Table, Kind string }
+
+type NodeMenuMsg struct {
+	Kind        NodeKind
+	Label       string
+	ConnName    string
+	SessionName string
+	Schema      string
+	Table       string
+	Sub         string
+}
 
 func MsgError(msg any) error {
 	switch m := msg.(type) {
@@ -484,9 +492,20 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return m.activate()
 	case "m":
 		n := m.selected()
-		if n != nil && n.Kind == KindTable {
-			return func() tea.Msg {
-				return TableMenuMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
+		if n != nil {
+			switch n.Kind {
+			case KindConnection, KindDatabase, KindTable:
+				return func() tea.Msg {
+					return NodeMenuMsg{
+						Kind:        n.Kind,
+						Label:       n.Label,
+						ConnName:    n.ConnName,
+						SessionName: n.SessionName,
+						Schema:      n.Schema,
+						Table:       n.Table,
+						Sub:         n.Sub,
+					}
+				}
 			}
 		}
 	case "o":
@@ -732,6 +751,15 @@ func (m *Model) CursorPath() string {
 // match yet is kept, because table and column nodes load asynchronously.
 func (m *Model) RestoreCursor(path string) {
 	m.pendingCursor = path
+}
+
+// ReloadSelected reloads the selected node, if it belongs to the current
+// connection.
+func (m *Model) ReloadSelected() tea.Cmd {
+	if n := m.selected(); n != nil {
+		return m.reload(n)
+	}
+	return nil
 }
 
 func (m *Model) View() string {

@@ -76,8 +76,8 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			editInfoMsg, mutationDoneMsg, celledit.SubmittedMsg, confirm.ConfirmedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
-			sidebar.ConnectMsg, sidebar.TableMenuMsg, sidebar.TableOpenMsg,
-			sidebar.TableActivateMsg, sidebar.EditorOpenMsg, sidebar.ConnectionInfoMsg, overviewLoadedMsg, versionLoadedMsg,
+			sidebar.ConnectMsg, sidebar.TableOpenMsg,
+			sidebar.TableActivateMsg, sidebar.EditorOpenMsg, sidebar.ConnectionInfoMsg, sidebar.NodeMenuMsg, overviewLoadedMsg, versionLoadedMsg,
 			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg:
 		default:
 			return m
@@ -992,7 +992,7 @@ func TestAutoFocusLayout(t *testing.T) {
 func TestMenuFocusLayout(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -1951,5 +1951,248 @@ func TestOverviewEnterOpensTableData(t *testing.T) {
 	}
 	if m.focus != focusResults {
 		t.Fatalf("focus = %v", m.focus)
+	}
+}
+
+func TestLayoutMenuChoice(t *testing.T) {
+	m := testModel(t, "en")
+	m.layout()
+	stackedEditorH := m.editorH
+	stackedResultsH := m.resultsH
+
+	m.applyMenuChange(menu.ChangedMsg{ID: "layout", Value: 1})
+	if m.layoutMode != config.LayoutColumns || !m.columnsActive {
+		t.Fatalf("columns layout not active: mode=%q active=%v", m.layoutMode, m.columnsActive)
+	}
+	if m.editorW <= 0 || m.resultsW <= 0 {
+		t.Fatalf("editorW=%d resultsW=%d", m.editorW, m.resultsW)
+	}
+
+	m.applyMenuChange(menu.ChangedMsg{ID: "layout", Value: 2})
+	if m.layoutMode != config.LayoutResultsTop || m.columnsActive {
+		t.Fatalf("results-top layout not active: mode=%q active=%v", m.layoutMode, m.columnsActive)
+	}
+	if m.editorH != stackedResultsH || m.resultsH != stackedEditorH {
+		t.Fatalf("heights not swapped: editor=%d results=%d", m.editorH, m.resultsH)
+	}
+
+	m.applyMenuChange(menu.ChangedMsg{ID: "layout", Value: 0})
+	if m.layoutMode != config.LayoutStacked {
+		t.Fatalf("mode = %q", m.layoutMode)
+	}
+	if m.editorH != stackedEditorH || m.resultsH != stackedResultsH {
+		t.Fatalf("stacked heights = %d/%d, want %d/%d", m.editorH, m.resultsH, stackedEditorH, stackedResultsH)
+	}
+}
+
+func TestColumnsLayoutViewWidth(t *testing.T) {
+	m := testModel(t, "en")
+	m.layoutMode = config.LayoutColumns
+	m.layout()
+	if !m.columnsActive {
+		t.Fatal("columns layout not active")
+	}
+	for _, line := range strings.Split(m.View().Content, "\n") {
+		if got := ansi.StringWidth(line); got != m.width {
+			t.Fatalf("line width = %d, want %d: %q", got, m.width, line)
+		}
+	}
+}
+
+func TestConnectionNodeMenu(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'm'})
+	if !m.tableMenu.IsOpen() {
+		t.Fatalf("menu should open for a connection node, status=%s", m.status)
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "Connect") {
+		t.Fatalf("connection menu missing Connect:\n%s", ansi.Strip(m.View().Content))
+	}
+}
+
+func TestNodeMenuItemsPerKind(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	connection := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindConnection, ConnName: "local-sqlite"})
+	if len(connection) != 3 {
+		t.Fatalf("connection items = %d, want 3", len(connection))
+	}
+	database := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindDatabase, Label: "main", SessionName: "local-sqlite/main"})
+	if len(database) != 9 {
+		t.Fatalf("database items = %d, want 9", len(database))
+	}
+	if database[0].ID != "db.open" || database[2].ID != "db.close" || database[4].ID != "db.export.sql" {
+		t.Fatalf("database items = %#v", database)
+	}
+	table := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindTable, Schema: "main", Table: "users", Sub: "table"})
+	if len(table) != 12 || table[0].ID != "table.data" || table[7].ID != "table.export.sql" {
+		t.Fatalf("table items = %#v", table)
+	}
+}
+
+func TestCloseSession(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	background, err := db.Open(context.Background(), db.Config{
+		Name:   "other",
+		Type:   "sqlite",
+		Params: map[string]string{"path": ":memory:"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := background.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["other"] = &session{conn: background}
+
+	m.closeSession("other")
+	if _, ok := m.sessions["other"]; ok {
+		t.Fatal("session was not removed")
+	}
+	if err := background.Ping(context.Background()); err == nil {
+		t.Fatal("connection is still open after closeSession")
+	}
+}
+
+func TestExportTableSQL(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.outDir = t.TempDir()
+	m = runCmd(t, m, m.exportTableCmd("main", "users", "sql"))
+
+	entries, err := os.ReadDir(m.outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("files = %d, want 1", len(entries))
+	}
+	data, err := os.ReadFile(filepath.Join(m.outDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "CREATE TABLE") || !strings.Contains(string(data), "INSERT INTO") {
+		t.Fatalf("SQL dump:\n%s", data)
+	}
+}
+
+func TestExportDatabaseSQL(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	base := m.cfg.Find("local-sqlite")
+	if base == nil {
+		t.Fatal("missing base connection")
+	}
+	derived := *base
+	derived.Name = "local-sqlite/main"
+	derived.Database = "main"
+	m.cfg.Connections = append(m.cfg.Connections, derived)
+	m.connName = "local-sqlite/main"
+	m.outDir = t.TempDir()
+
+	m = runCmd(t, m, m.exportDatabaseCmd("local-sqlite/main", "sql"))
+	entries, err := os.ReadDir(m.outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("files = %d, want 1", len(entries))
+	}
+	data, err := os.ReadFile(filepath.Join(m.outDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "users") || !strings.Contains(string(data), "INSERT INTO") {
+		t.Fatalf("database SQL dump:\n%s", data)
+	}
+}
+
+func TestExportProgress(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.outDir = t.TempDir()
+
+	var messages []tea.Msg
+	m.SetSender(func(msg tea.Msg) { messages = append(messages, msg) })
+	m = runCmd(t, m, m.exportTableCmd("main", "users", "sql"))
+	if len(messages) != 1 {
+		t.Fatalf("progress messages = %d, want 1", len(messages))
+	}
+	progress, ok := messages[0].(exportProgressMsg)
+	if !ok || progress.label != "users" || progress.total != 0 {
+		t.Fatalf("progress = %#v", messages[0])
+	}
+
+	model, _ := m.Update(progress)
+	m = model.(*Model)
+	if !m.exporting {
+		t.Fatal("exporting flag not set")
+	}
+	if !strings.Contains(m.status, "users") {
+		t.Fatalf("status = %q", m.status)
+	}
+	model, _ = m.Update(exportedMsg{path: "/tmp/out.sql"})
+	m = model.(*Model)
+	if m.exporting {
+		t.Fatal("exporting flag not cleared")
+	}
+}
+
+func TestExportDatabaseProgress(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	base := m.cfg.Find("local-sqlite")
+	if base == nil {
+		t.Fatal("missing base connection")
+	}
+	derived := *base
+	derived.Name = "local-sqlite/main"
+	derived.Database = "main"
+	m.cfg.Connections = append(m.cfg.Connections, derived)
+	m.connName = "local-sqlite/main"
+	m.outDir = t.TempDir()
+
+	var messages []tea.Msg
+	m.SetSender(func(msg tea.Msg) { messages = append(messages, msg) })
+	m = runCmd(t, m, m.exportDatabaseCmd("local-sqlite/main", "sql"))
+	if len(messages) < 2 {
+		t.Fatalf("progress messages = %d, want at least 2", len(messages))
+	}
+	last, ok := messages[len(messages)-1].(exportProgressMsg)
+	if !ok || last.total == 0 || last.done != last.total {
+		t.Fatalf("last progress = %#v", messages[len(messages)-1])
 	}
 }

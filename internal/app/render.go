@@ -5,6 +5,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/LinduanTof/b-db/internal/config"
 	"github.com/LinduanTof/b-db/internal/i18n"
 	"github.com/LinduanTof/b-db/internal/ui/textutil"
 	"github.com/LinduanTof/b-db/internal/ui/theme"
@@ -52,6 +53,20 @@ func (m *Model) layout() {
 	}
 	rightW := m.width - sideW - 1
 
+	m.columnsActive = false
+	if m.layoutMode == config.LayoutColumns && rightW-1 >= 60 {
+		m.columnsActive = true
+		editorW := (rightW - 1) / 2
+		resultsW := rightW - 1 - editorW
+		m.sideW, m.rightW = sideW, rightW
+		m.editorW, m.resultsW = editorW, resultsW
+		m.editorH, m.resultsH = mainH, mainH
+		m.sidebar.SetSize(sideW, max(1, mainH-1))
+		m.editor.SetSize(editorW, max(1, mainH-2))
+		m.results.SetSize(resultsW, max(1, mainH-1))
+		return
+	}
+
 	editorH := mainH / 3
 	if editorH < 6 {
 		editorH = 6
@@ -65,6 +80,9 @@ func (m *Model) layout() {
 	resultsH := mainH - editorH - 1
 	if resultsH < 1 {
 		resultsH = 1
+	}
+	if m.layoutMode == config.LayoutResultsTop {
+		editorH, resultsH = resultsH, editorH
 	}
 
 	m.sideW, m.rightW, m.editorH, m.resultsH = sideW, rightW, editorH, resultsH
@@ -126,11 +144,23 @@ func (m *Model) renderMain() string {
 		}
 	} else {
 		side := renderPane(m.t.T(i18n.KeyPaneConnections), m.sidebarHint(m.sideW), m.sidebar.View(), m.sideW, mainH)
-		editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
-		resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.rightW, m.resultsH)
-		right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
 		separator := strings.Repeat("│\n", mainH-1) + "│"
-		body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
+		switch {
+		case m.columnsActive:
+			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.editorW)+"\n"+m.editor.View(), m.editorW, mainH)
+			resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.resultsW, mainH)
+			body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, editorView, separator, resultsView)
+		case m.layoutMode == config.LayoutResultsTop:
+			resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.rightW, m.resultsH)
+			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
+			right := lipgloss.JoinVertical(lipgloss.Top, resultsView, strings.Repeat("─", m.rightW), editorView)
+			body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
+		default:
+			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
+			resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.rightW, m.resultsH)
+			right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
+			body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
+		}
 	}
 
 	m.statusbar.Width = m.width
@@ -255,7 +285,7 @@ func (m *Model) statusRight() string {
 	switch {
 	case m.statusErr:
 		icon = "✗"
-	case m.running:
+	case m.running || m.exporting:
 		icon = "…"
 	case m.status == m.t.T(i18n.KeyStatusReady):
 		icon = "✓"

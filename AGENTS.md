@@ -43,9 +43,9 @@ go test ./...     # 需要 testdata/demo.db 已经存在
 - `View()` 返回 `tea.NewView(m.render())`,启用备用屏幕、单元格级鼠标事件和 Kitty 键盘增强协议(用于区分 `Ctrl+Enter` 与 `Enter`)。
 - 异步操作放在返回类型化消息的 `tea.Cmd` 闭包中(`connOpenedMsg`、`queryDoneMsg`、`tablePageDoneMsg`、`mutationDoneMsg` 等),处理器回到根模型执行。查询带 `querySeq` 序号,过期结果会被丢弃。
 - 表数据浏览与编辑器查询是两条独立路径:前者走 `pagination.go` 的 `runPageQuery`/`tablePageDoneMsg`,维护 `pagination` 并设置可编辑来源,不读写编辑器;后者走 `runQuery`/`queryDoneMsg`,只处理编辑器内容。两者共享结果面板,编辑器查询成功后会清除分页状态。
-- 侧栏 `↑`/`↓` 只移动光标,`Enter` 才激活节点。表节点激活(`sidebar.TableActivateMsg`)会新建或复用同名标签(`editorTab.source`)并预填 SQL,同时通过分页路径加载数据;`s` 只预览数据,`m` 打开表操作菜单,`o` 只写入编辑器而不执行。连接根激活显示连接信息,数据库节点激活显示表概览,二者通过 `Model.context`(`contextInfo`/`contextTables`/`contextData`/`contextQuery`)决定结果面板标题、提示和 `r` 的行为。
+- 侧栏 `↑`/`↓` 只移动光标,`Enter` 才激活节点。表节点激活(`sidebar.TableActivateMsg`)会新建或复用同名标签(`editorTab.source`)并预填 SQL,同时通过分页路径加载数据;`s` 只预览数据,`m` 打开当前节点(连接/数据库/表)的操作菜单(`sidebar.NodeMenuMsg`),`o` 只写入编辑器而不执行。连接根激活显示连接信息,数据库节点激活显示表概览,二者通过 `Model.context`(`contextInfo`/`contextTables`/`contextData`/`contextQuery`)决定结果面板标题、提示和 `r` 的行为。
 - 表概览原始数据保存在 `overviewAll`,客户端过滤词在 `overviewFilter`;`rebuildOverview` 子串匹配前三列后重新注入结果面板。切换会话或断开时必须调用 `resetOverviewState`,否则旧概览会串到新连接;`r` 重新加载后会自动重新应用过滤词。服务端版本异步加载,`versionSeq` 防止旧连接的版本覆盖当前面板。
-- 布局是手动计算的:`layout()` 计算 `sideW`、`rightW`、`editorH`、`resultsH`;终端小于 20x6 时直接返回,小于 40x10 时渲染 "terminal too small" 提示。焦点模式有 `manual`(F2 切换缩放)和 `auto`(缩放跟随焦点,F2 暂停)。
+- 布局是手动计算的:`layout()` 计算 `sideW`、`rightW`、`editorH`、`resultsH`;终端小于 20x6 时直接返回,小于 40x10 时渲染 "terminal too small" 提示。焦点模式有 `manual`(F2 切换缩放)和 `auto`(缩放跟随焦点,F2 暂停)。`ui.layout` 支持 `stacked`(默认)、`columns`(三栏,右侧宽度不足 60 列时回退 stacked,结果记在 `columnsActive`)和 `results-top`(结果在上);菜单切换会写入状态文件,启动时状态文件优先于配置。
 - 会话保存在 `map[string]*session` 中。切换连接时保存当前编辑器/结果/补全器/编辑缓存/标签/分页/结果面板上下文/概览数据与过滤词/侧栏光标,并恢复目标会话。任何新的按连接保存的 UI 状态都必须加入 `saveCurrentSession` 和 `activateSession`,否则会在连接之间串数据。
 - 侧栏光标用 `sidebar.CursorPath()`/`RestoreCursor(path)` 按节点路径恢复;`pendingCursor` 会保留到树中出现匹配节点,以覆盖表/列节点的异步加载。切换会话时仅当目标会话上次停留在 `contextTables` 才重新加载概览,否则保留上次的表数据或查询结果。
 - 侧栏的活动会话标记由 `syncSidebarSessions` 注入(`sessions` 的 key 加当前连接)。新增连接、断开、切换或重置会话后必须调用它,否则侧栏的 `●`/`◉` 状态和活动数量会过期。
@@ -76,6 +76,8 @@ func (m *Model) View() string
 - `internal/query/executor.go` 根据顶层语句类型选择 `Query` 或 `Exec`:识别 `WITH` 的 CTE 体、`RETURNING`、括号包裹的查询以及 PostgreSQL dollar-quoting。`query.IsWrite` 用于只读连接的保守写入拦截。Redis/Mongo 设置 `AlwaysQuery`,因为它们所谓的 "SQL" 实际是命令前端。
 - 只有从表视图打开、且表有主键的结果才允许编辑。SQL 写入在事务中执行,影响行数必须恰好为 1;预览 SQL 通过 dialect 生成。`read_only: true` 会在 app 层阻止单元格编辑和 SQL 写入语句,但这是保守的客户端检查,不能替代数据库侧的只读账号。
 - 可选能力通过接口断言实现,不要把它们加进 `Conn`:服务端版本用 `db.Versioner`,表统计用 `db.TableStatProvider`(PG/MySQL 实现,SQLite 返回 nil)。统计包含行数估算、大小、列数与表注释;失败只降级为 `-`,不影响表列表。
+- 大结果集导出必须用 `db.Streamer`/`db.RowStream`(SQL 驱动实现),不要用 `Querier.Query` 把整表载入内存。`RowStream` 是前向游标,调用方负责 `Close`;导出总超时 30 分钟,连接池上限为 4,库级导出逐表打开并在写完后立即关闭游标。XLSX 单 sheet 上限 1,048,575 行,超出返回错误。
+- 表/库节点菜单的导出由 `app/export_data.go` 编排:导出在 `tea.Cmd` 中后台执行,逐表读取 DDL 与流式数据。库级导出优先复用当前会话连接,其次复用 `sessions` 中的连接,否则临时 `db.Open` 并在结束后关闭。CSV 输出目录,SQL/JSON/Excel 单文件。XLSX 由 `internal/export/xlsx.go` 手写 OOXML,不引入第三方依赖。进度通过 `Model.SetSender` 注入的 `program.Send` 从后台推送 `exportProgressMsg`(表计数与每 10 万行行数),状态栏显示当前表与计数;测试中可直接注入回调。`exporting` 标志让状态栏显示进行中图标,`exportedMsg` 负责清除。
 - 表概览的原始行结构固定为 `schema/表名/类型/行数/大小/列数/注释`,`overviewAll` 与过滤都基于这个结构;渲染时 `typeHasSchema` 为 false 的连接(MySQL/MongoDB)去掉首列,避免重复展示数据库名。`contextTables` 下结果面板处于行选择模式(`results.SetRowMode`):左右键不移动列,`Enter`/`v` 通过 `openOverviewTable` 打开当前行表的数据预览。
 - Redis 支持 `SCAN 0 COUNT 50`、`GET "key"` 等命令;Mongo 支持 `find db.collection [json]`、`findOne`、`aggregate`、`count`。二者都不支持写入(`Mutator()` 返回 `nil`)。
 
@@ -87,6 +89,7 @@ func (m *Model) View() string
 | 运行时添加的连接 | `$XDG_STATE_HOME/bdb/connections.yaml` |
 | 查询历史 | `$XDG_STATE_HOME/bdb/history` |
 | 当前主题 | `$XDG_STATE_HOME/bdb/theme` |
+| 当前布局 | `$XDG_STATE_HOME/bdb/layout` |
 
 - `${ENV_VAR}` 展开适用于大多数连接字符串字段;变量缺失时会报错并指出连接名与字段,不会静默使用空字符串。
 - 运行时连接仅在主配置中不存在同名连接时才合并;新增数据源会保存原始 `${VAR}` 引用,但当前会话使用展开后的副本连接。

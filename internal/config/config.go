@@ -29,6 +29,22 @@ const (
 )
 
 const (
+	LayoutStacked    = "stacked"
+	LayoutColumns    = "columns"
+	LayoutResultsTop = "results-top"
+)
+
+// NormalizeLayout maps unknown values to the default stacked layout.
+func NormalizeLayout(name string) string {
+	switch name {
+	case LayoutColumns, LayoutResultsTop:
+		return name
+	default:
+		return LayoutStacked
+	}
+}
+
+const (
 	defaultTimeout = 30 * time.Second
 	defaultMaxRows = 1000
 )
@@ -65,6 +81,7 @@ type UIConfig struct {
 	Language  string `yaml:"language"`
 	Theme     string `yaml:"theme"`
 	FocusMode string `yaml:"focus_mode"`
+	Layout    string `yaml:"layout"`
 }
 
 type QueryConfig struct {
@@ -113,6 +130,7 @@ ui:
   language: auto
   theme: default
   focus_mode: manual
+  layout: stacked   # stacked | columns | results-top
 
 query:
   timeout: 30s
@@ -220,6 +238,7 @@ func (c *Config) applyDefaults() {
 	default:
 		c.UI.FocusMode = FocusModeManual
 	}
+	c.UI.Layout = NormalizeLayout(c.UI.Layout)
 	if c.Query.Timeout <= 0 {
 		c.Query.Timeout = Duration(defaultTimeout)
 	}

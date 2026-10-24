@@ -5,6 +5,9 @@ ui:
   theme: default
   # manual | auto: F2 focuses the active pane; auto follows focus
   focus_mode: manual
+  # stacked | columns | results-top: sidebar with stacked panes, three
+  # columns, or the results pane above the editor
+  layout: stacked
 
 query:
   timeout: 30s
