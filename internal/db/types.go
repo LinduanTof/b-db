@@ -66,6 +66,27 @@ type DatabaseLister interface {
 	Databases(ctx context.Context) ([]string, error)
 }
 
+// Versioner is implemented by connections that can report a server version.
+type Versioner interface {
+	Version(ctx context.Context) (string, error)
+}
+
+// TableStat holds approximate per-table metadata. Negative values mean the
+// driver could not determine them.
+type TableStat struct {
+	Name    string
+	Rows    int64
+	Size    int64
+	Columns int64
+	Comment string
+}
+
+// TableStatProvider is implemented by connections that can report table
+// statistics for a schema.
+type TableStatProvider interface {
+	TableStats(ctx context.Context, schema string) ([]TableStat, error)
+}
+
 type Querier interface {
 	Query(ctx context.Context, stmt string, maxRows int) (*ResultSet, error)
 	Exec(ctx context.Context, stmt string) (*ExecResult, error)

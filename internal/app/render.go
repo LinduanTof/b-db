@@ -14,6 +14,7 @@ func (m *Model) layout() {
 	if m.width < 20 || m.height < 6 {
 		return
 	}
+	m.filterInput.SetWidth(max(8, min(30, m.width-30)))
 	mainH := m.height - 2
 	if m.effectiveZoom() {
 		switch m.focus {
@@ -119,14 +120,14 @@ func (m *Model) renderMain() string {
 		case focusEditor:
 			body = renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.width)+"\n"+m.editor.View(), m.width, mainH)
 		case focusResults:
-			body = renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.width, mainH)
+			body = renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.width, mainH)
 		default:
 			body = renderPane(m.t.T(i18n.KeyPaneConnections), m.sidebarHint(m.width), m.sidebar.View(), m.width, mainH)
 		}
 	} else {
 		side := renderPane(m.t.T(i18n.KeyPaneConnections), m.sidebarHint(m.sideW), m.sidebar.View(), m.sideW, mainH)
 		editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
-		resultsView := renderPane(m.t.T(i18n.KeyPaneResults), m.t.T(i18n.KeyHintResults), m.results.View(), m.rightW, m.resultsH)
+		resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.rightW, m.resultsH)
 		right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
 		separator := strings.Repeat("│\n", mainH-1) + "│"
 		body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
@@ -180,8 +181,31 @@ func (m *Model) sidebarHint(width int) string {
 	return m.t.T(i18n.KeyHintSidebarCompact)
 }
 
+func (m *Model) resultsPaneTitle() string {
+	switch m.context {
+	case contextInfo:
+		return m.t.T(i18n.KeyPaneInfo)
+	case contextTables:
+		return m.t.T(i18n.KeyPaneOverview)
+	default:
+		return m.t.T(i18n.KeyPaneResults)
+	}
+}
+
+func (m *Model) resultsPaneHint() string {
+	switch m.context {
+	case contextInfo, contextTables:
+		if m.context == contextTables && m.filtering {
+			return m.t.T(i18n.KeyHintFilter) + m.filterInput.View()
+		}
+		return m.t.T(i18n.KeyHintOverview)
+	default:
+		return m.t.T(i18n.KeyHintResults)
+	}
+}
+
 func (m *Model) statusLeft() string {
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
 	switch m.focus {
 	case focusSidebar:
 		parts = append(parts, m.t.T(i18n.KeyPaneConnections))
@@ -190,10 +214,37 @@ func (m *Model) statusLeft() string {
 	case focusResults:
 		parts = append(parts, m.t.T(i18n.KeyPaneResults))
 	}
+	if crumb := m.breadcrumb(); crumb != "" {
+		parts = append(parts, crumb)
+	}
 	if title := m.activeTabTitle(); title != "" {
 		parts = append(parts, title)
 	}
 	return " " + strings.Join(parts, "  │  ") + " "
+}
+
+func (m *Model) breadcrumb() string {
+	if m.connName == "" {
+		return ""
+	}
+	parts := []string{sessionBase(m.connName)}
+	database := sessionDatabase(m.connName)
+	if database != "" {
+		parts = append(parts, database)
+	}
+	schema, table := "", ""
+	if m.pager != nil {
+		schema, table = m.pager.schema, m.pager.table
+	} else if m.activeTab >= 0 && m.activeTab < len(m.tabs) {
+		schema, table = m.tabs[m.activeTab].source.schema, m.tabs[m.activeTab].source.table
+	}
+	if table != "" {
+		if schema != "" && schema != "main" && schema != database {
+			parts = append(parts, schema)
+		}
+		parts = append(parts, table)
+	}
+	return strings.Join(parts, " / ")
 }
 
 func (m *Model) statusRight() string {

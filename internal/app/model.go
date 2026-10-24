@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	ac "github.com/LinduanTof/b-db/internal/complete"
@@ -44,6 +45,15 @@ const (
 	focusSidebar focus = iota
 	focusEditor
 	focusResults
+)
+
+type contextKind int
+
+const (
+	contextQuery contextKind = iota
+	contextInfo
+	contextTables
+	contextData
 )
 
 type connOpenedMsg struct {
@@ -124,6 +134,18 @@ type scriptDoneMsg struct {
 	exec     *db.ExecResult
 	elapsed  time.Duration
 	err      error
+}
+
+type overviewLoadedMsg struct {
+	id   uint64
+	rows [][]any
+	err  error
+}
+
+type versionLoadedMsg struct {
+	id      uint64
+	version string
+	err     error
 }
 
 type tableRef struct {
@@ -214,6 +236,7 @@ type Model struct {
 
 	querySeq       uint64
 	connectSeq     uint64
+	overviewSeq    uint64
 	cancel         context.CancelFunc
 	mutationCancel context.CancelFunc
 	connectCancel  context.CancelFunc
@@ -223,7 +246,18 @@ type Model struct {
 	status    string
 	statusErr bool
 	showHelp  bool
+	context   contextKind
 	outDir    string
+
+	infoName    string
+	infoStatus  string
+	infoVersion string
+	versionSeq  uint64
+
+	overviewAll    [][]any
+	overviewFilter string
+	filterInput    textinput.Model
+	filtering      bool
 }
 
 type session struct {
@@ -236,6 +270,10 @@ type session struct {
 	pager        *pagination
 	tabs         []editorTab
 	activeTab    int
+	context      contextKind
+	overviewAll  [][]any
+	filter       string
+	cursor       string
 }
 
 func New(cfg *config.Config, t *i18n.Translator) *Model {
@@ -277,6 +315,9 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
 	m.sessions = map[string]*session{}
+	m.filterInput = textinput.New()
+	m.filterInput.Prompt = ""
+	m.filterInput.CharLimit = 64
 	if wd, err := os.Getwd(); err == nil {
 		m.outDir = wd
 	}
@@ -423,11 +464,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sidebar.ConnectMsg:
 		return m, m.switchToConnection(msg.Name)
 	case sidebar.DatabaseMsg:
+		if msg.Session == m.connName {
+			return m, m.loadOverviewCmd()
+		}
 		return m, m.switchToConnection(msg.Session)
-	case sidebar.SelectTableMsg:
-		return m, m.openTable(msg)
+	case sidebar.TableActivateMsg:
+		return m, m.activateTable(msg.Schema, msg.Table, msg.Kind)
+	case sidebar.EditorOpenMsg:
+		return m, m.openTableTab(msg.Schema, msg.Table, msg.Kind)
 	case sidebar.TableOpenMsg:
 		return m, m.openTableData(msg.Schema, msg.Table, msg.Kind)
+	case sidebar.ConnectionInfoMsg:
+		return m, m.showConnectionInfo(msg.Name, m.t.T(i18n.KeyStatusConnected))
+	case overviewLoadedMsg:
+		return m, m.handleOverviewLoaded(msg)
+	case versionLoadedMsg:
+		m.handleVersionLoaded(msg)
+		return m, nil
 	case sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg:
 		if err := sidebar.MsgError(msg); err != nil {
 			m.setStatus(m.t.T(i18n.KeyErrorCatalog, err), true)
@@ -623,6 +676,28 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return cmd
 	}
+	if m.filtering {
+		switch key {
+		case "esc":
+			m.filtering = false
+			m.overviewFilter = ""
+			m.filterInput.SetValue("")
+			m.filterInput.Blur()
+			m.rebuildOverview()
+			return nil
+		case "enter":
+			m.filtering = false
+			m.filterInput.Blur()
+			return nil
+		}
+		var cmd tea.Cmd
+		m.filterInput, cmd = m.filterInput.Update(msg)
+		if value := m.filterInput.Value(); value != m.overviewFilter {
+			m.overviewFilter = value
+			m.rebuildOverview()
+		}
+		return cmd
+	}
 	if m.showHelp {
 		switch key {
 		case "?", "esc":
@@ -770,6 +845,17 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			if m.pager != nil {
 				return m.clearTableSort()
 			}
+		case "r":
+			if m.context == contextTables {
+				return m.loadOverviewCmd()
+			}
+		case "/":
+			if m.context == contextTables {
+				m.filtering = true
+				m.filterInput.SetValue(m.overviewFilter)
+				m.filterInput.Focus()
+				return nil
+			}
 		case "c":
 			text := m.results.CursorCell()
 			if text == "" {
@@ -862,7 +948,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	}
 	if msg.err != nil {
 		m.setStatus(m.t.T(i18n.KeyErrorConnect, msg.err), true)
-		return nil
+		return m.showConnectionInfo(msg.name, msg.err.Error())
 	}
 	if m.conn != nil && m.connName == msg.name {
 		m.conn.Close()
@@ -888,6 +974,11 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	cmds := []tea.Cmd{m.sidebarConnCmd(m.conn, msg.name), m.loadCompletionTablesCmd(), m.scheduleTabSave()}
 	if sidebar.SupportsDatabases(m.conn.Type()) {
 		cmds = append(cmds, m.loadDatabasesCmd(sessionBase(msg.name), m.conn))
+	}
+	if sessionDatabase(msg.name) != "" && sidebar.SupportsDatabases(m.conn.Type()) {
+		cmds = append(cmds, m.loadOverviewCmd())
+	} else {
+		cmds = append(cmds, m.showConnectionInfo(msg.name, m.t.T(i18n.KeyStatusConnected)))
 	}
 	if m.pendingScript != "" {
 		path := m.pendingScript
@@ -993,10 +1084,12 @@ func (m *Model) runQuery() tea.Cmd {
 		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
 		return nil
 	}
+	m.context = contextQuery
 	return m.runStatement(stmt, true, 0)
 }
 
 func (m *Model) runTableCommand(stmt string) tea.Cmd {
+	m.context = contextData
 	return m.runStatement(stmt, false, max(1, m.cfg.Query.MaxRows))
 }
 
@@ -1159,23 +1252,353 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) openTable(msg sidebar.SelectTableMsg) tea.Cmd {
-	if m.conn != nil && m.conn.Type() == "redis" {
-		m.editor.SetValue(redisCommand(msg.Kind, msg.Table))
-		m.focus = focusEditor
-		m.layout()
-		return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
+func (m *Model) activateTable(schema, table, kind string) tea.Cmd {
+	cmd := m.openTableTab(schema, table, kind)
+	if m.conn != nil && (m.conn.Type() == "redis" || m.conn.Type() == "mongo") {
+		m.context = contextData
+		return cmd
 	}
-	if m.conn != nil && m.conn.Type() == "mongo" {
-		m.editor.SetValue(mongoCommand(msg.Schema, msg.Table))
-		m.focus = focusEditor
-		m.layout()
-		return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
+	return tea.Batch(cmd, m.tableData(schema, table))
+}
+
+func (m *Model) tableStmt(schema, table, kind string) string {
+	switch {
+	case m.conn != nil && m.conn.Type() == "redis":
+		return redisCommand(kind, table)
+	case m.conn != nil && m.conn.Type() == "mongo":
+		return mongoCommand(schema, table)
+	default:
+		return m.selectTableStmt(schema, table)
 	}
-	m.editor.SetValue(m.selectTableStmt(msg.Schema, msg.Table))
+}
+
+func (m *Model) openTableTab(schema, table, kind string) tea.Cmd {
+	m.syncActiveTab()
+	m.completion.Close()
+	source := tableSource{schema: schema, table: table}
+	for i := range m.tabs {
+		if m.tabs[i].source == source {
+			m.activeTab = i
+			m.editor = m.tabs[i].editor
+			m.focus = focusEditor
+			m.layout()
+			return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
+		}
+	}
+	ed := editor.New(m.t)
+	if m.history != nil {
+		ed.SetHistory(m.history.Entries())
+	}
+	ed.SetValue(m.tableStmt(schema, table, kind))
+	m.tabs = append(m.tabs, editorTab{title: qualifiedTable(schema, table), editor: ed, source: source})
+	m.activeTab = len(m.tabs) - 1
+	m.editor = ed
 	m.focus = focusEditor
 	m.layout()
 	return tea.Batch(m.editor.Focus(), m.scheduleTabSave())
+}
+
+func sessionDatabase(name string) string {
+	if index := strings.Index(name, "/"); index >= 0 {
+		return name[index+1:]
+	}
+	return ""
+}
+
+func (m *Model) showConnectionInfo(name, status string) tea.Cmd {
+	m.infoName, m.infoStatus = name, status
+	m.infoVersion = "-"
+	var cmd tea.Cmd
+	if m.conn != nil && sessionBase(name) == sessionBase(m.connName) {
+		if _, ok := m.conn.(db.Versioner); ok {
+			m.infoVersion = ""
+			cmd = m.versionCmd()
+		}
+	}
+	m.renderConnectionInfo()
+	return cmd
+}
+
+func (m *Model) renderConnectionInfo() {
+	cfg := m.cfg.Find(m.infoName)
+	if cfg == nil {
+		return
+	}
+	text := func(value string) any {
+		if value == "" {
+			return m.t.T(i18n.KeyInfoNone)
+		}
+		return value
+	}
+	host := cfg.Host
+	if cfg.Port > 0 {
+		host = fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	}
+	switch cfg.Type {
+	case config.TypeSQLite:
+		host = cfg.Path
+	case config.TypeRedis:
+		host = cfg.Addr
+	case config.TypeMongo:
+		if cfg.URI != "" {
+			host = cfg.URI
+		}
+	}
+	database := cfg.Database
+	if database == "" {
+		database = m.t.T(i18n.KeyInfoAllDatabases)
+	}
+	readonly := m.t.T(i18n.KeyInfoNo)
+	if cfg.ReadOnly {
+		readonly = m.t.T(i18n.KeyInfoYes)
+	}
+	version := m.infoVersion
+	if version == "" {
+		version = "…"
+	}
+	rows := [][]any{
+		{m.t.T(i18n.KeyFormName), text(cfg.Name)},
+		{m.t.T(i18n.KeyFormType), text(cfg.Type)},
+		{m.t.T(i18n.KeyFormHost), text(host)},
+		{m.t.T(i18n.KeyFormUser), text(cfg.User)},
+		{m.t.T(i18n.KeyFormDatabase), database},
+	}
+	if cfg.Type == config.TypePostgres {
+		rows = append(rows, []any{m.t.T(i18n.KeyFormSSLMode), text(cfg.SSLMode)})
+	}
+	rows = append(rows,
+		[]any{m.t.T(i18n.KeyInfoVersion), version},
+		[]any{m.t.T(i18n.KeyInfoReadOnly), readonly},
+		[]any{m.t.T(i18n.KeyInfoStatus), m.infoStatus},
+	)
+	m.results.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{
+			{Name: m.t.T(i18n.KeyInfoField)},
+			{Name: m.t.T(i18n.KeyInfoValue)},
+		},
+		Rows: rows,
+	})
+	m.pager = nil
+	m.context = contextInfo
+}
+
+func (m *Model) versionCmd() tea.Cmd {
+	if m.conn == nil {
+		return nil
+	}
+	versioner, ok := m.conn.(db.Versioner)
+	if !ok {
+		return nil
+	}
+	m.versionSeq++
+	id := m.versionSeq
+	timeout := m.cfg.Query.Timeout.Std()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		version, err := versioner.Version(ctx)
+		return versionLoadedMsg{id: id, version: version, err: err}
+	}
+}
+
+func (m *Model) handleVersionLoaded(msg versionLoadedMsg) {
+	if msg.id != m.versionSeq {
+		return
+	}
+	if msg.err != nil || msg.version == "" {
+		m.infoVersion = "-"
+	} else {
+		m.infoVersion = msg.version
+	}
+	if m.context == contextInfo {
+		m.renderConnectionInfo()
+	}
+}
+
+func (m *Model) loadOverviewCmd() tea.Cmd {
+	if m.conn == nil {
+		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
+		return nil
+	}
+	database := sessionDatabase(m.connName)
+	if database == "" {
+		if cfg := m.cfg.Find(m.connName); cfg != nil {
+			database = cfg.Database
+		}
+	}
+	if database == "" {
+		m.setStatus(m.t.T(i18n.KeyStatusNoDatabase), false)
+		return nil
+	}
+	m.overviewSeq++
+	id := m.overviewSeq
+	conn := m.conn
+	typ := conn.Type()
+	timeout := m.cfg.Query.Timeout.Std()
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		rows, err := overviewRows(ctx, conn, typ, database)
+		return overviewLoadedMsg{id: id, rows: rows, err: err}
+	}
+}
+
+func overviewRows(ctx context.Context, conn db.Conn, typ, database string) ([][]any, error) {
+	catalog := conn.Catalog()
+	provider, _ := conn.(db.TableStatProvider)
+	var schemas []string
+	if typ == config.TypeMySQL || typ == config.TypeMongo {
+		schemas = []string{database}
+	} else {
+		found, err := catalog.Schemas(ctx)
+		if err != nil {
+			return nil, err
+		}
+		schemas = found
+	}
+	var rows [][]any
+	var firstErr error
+	for _, schema := range schemas {
+		objects, err := catalog.Tables(ctx, schema)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		stats := map[string]db.TableStat{}
+		if provider != nil {
+			if found, err := provider.TableStats(ctx, schema); err == nil {
+				for _, stat := range found {
+					stats[stat.Name] = stat
+				}
+			}
+		}
+		for _, obj := range objects {
+			stat, known := stats[obj.Name]
+			comment := "-"
+			if known {
+				comment = stat.Comment
+			}
+			rows = append(rows, []any{
+				schema, obj.Name, obj.Kind,
+				formatStat(stat.Rows, known),
+				formatSize(stat.Size, known),
+				formatStat(stat.Columns, known),
+				comment,
+			})
+		}
+	}
+	if len(rows) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return rows, nil
+}
+
+func formatStat(value int64, known bool) string {
+	if !known || value < 0 {
+		return "-"
+	}
+	return strconv.FormatInt(value, 10)
+}
+
+func formatSize(value int64, known bool) string {
+	if !known || value < 0 {
+		return "-"
+	}
+	return humanBytes(value)
+}
+
+func humanBytes(value int64) string {
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+	div, exp := int64(unit), 0
+	for rest := value / unit; rest >= unit && exp < 4; rest /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(value)/float64(div), "KMGTPE"[exp])
+}
+
+func typeHasSchema(typ string) bool {
+	switch typ {
+	case config.TypePostgres, config.TypeSQLite:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Model) overviewColumns() []db.ColumnMeta {
+	columns := make([]db.ColumnMeta, 0, 7)
+	if m.conn == nil || typeHasSchema(m.conn.Type()) {
+		columns = append(columns, db.ColumnMeta{Name: m.t.T(i18n.KeyOverviewSchema)})
+	}
+	return append(columns,
+		db.ColumnMeta{Name: m.t.T(i18n.KeyOverviewTable)},
+		db.ColumnMeta{Name: m.t.T(i18n.KeyOverviewType)},
+		db.ColumnMeta{Name: m.t.T(i18n.KeyOverviewRows)},
+		db.ColumnMeta{Name: m.t.T(i18n.KeyOverviewSize)},
+		db.ColumnMeta{Name: m.t.T(i18n.KeyOverviewColumns)},
+		db.ColumnMeta{Name: m.t.T(i18n.KeyOverviewComment)},
+	)
+}
+
+func (m *Model) rebuildOverview() {
+	rows := m.overviewAll
+	if filter := strings.ToLower(strings.TrimSpace(m.overviewFilter)); filter != "" {
+		filtered := make([][]any, 0, len(rows))
+		for _, row := range rows {
+			fields := make([]string, 0, 3)
+			for i := 0; i < 3 && i < len(row); i++ {
+				fields = append(fields, fmt.Sprint(row[i]))
+			}
+			if strings.Contains(strings.ToLower(strings.Join(fields, " ")), filter) {
+				filtered = append(filtered, row)
+			}
+		}
+		rows = filtered
+	}
+	display := rows
+	if m.conn != nil && !typeHasSchema(m.conn.Type()) {
+		display = make([][]any, len(rows))
+		for i, row := range rows {
+			display[i] = row[1:]
+		}
+	}
+	m.results.SetResult(&db.ResultSet{Columns: m.overviewColumns(), Rows: display})
+	m.pager = nil
+	m.context = contextTables
+	m.setStatus(m.t.T(i18n.KeyStatusTables, len(rows)), false)
+}
+
+func (m *Model) resetOverviewState() {
+	m.overviewSeq++
+	m.versionSeq++
+	m.overviewAll = nil
+	m.overviewFilter = ""
+	m.filtering = false
+	m.filterInput.SetValue("")
+	m.filterInput.Blur()
+}
+
+func (m *Model) handleOverviewLoaded(msg overviewLoadedMsg) tea.Cmd {
+	if msg.id != m.overviewSeq {
+		return nil
+	}
+	if msg.err != nil {
+		m.overviewAll = nil
+		m.results.SetError(m.t.T(i18n.KeyErrorOverview, msg.err))
+		m.pager = nil
+		m.context = contextTables
+		m.setStatus(m.t.T(i18n.KeyErrorOverview, msg.err), true)
+		return nil
+	}
+	m.overviewAll = msg.rows
+	m.rebuildOverview()
+	return nil
 }
 
 func mongoCommand(schema, table string) string {
@@ -1286,7 +1709,7 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	if m.conn != nil && m.conn.Type() == "redis" {
 		switch msg.ID {
 		case "table.select":
-			return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table, Kind: m.tableMenuKind})
+			return m.openTableTab(schema, table, m.tableMenuKind)
 		}
 		m.setStatus(m.t.T(i18n.KeyErrorUnsupportedFeature, "redis"), true)
 		return nil
@@ -1294,12 +1717,12 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	if m.conn != nil && m.conn.Type() == "mongo" {
 		switch msg.ID {
 		case "table.select":
-			return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table, Kind: m.tableMenuKind})
+			return m.openTableTab(schema, table, m.tableMenuKind)
 		}
 	}
 	switch msg.ID {
 	case "table.select":
-		return m.openTable(sidebar.SelectTableMsg{Schema: schema, Table: table})
+		return m.openTableTab(schema, table, m.tableMenuKind)
 	case "table.structure":
 		return m.openDetail(schema, table)
 	case "table.ddl":
@@ -1484,6 +1907,8 @@ func (m *Model) disconnect() {
 	m.tableSchemas = map[string]string{}
 	m.editCache = map[string]editInfo{}
 	m.pager = nil
+	m.context = contextQuery
+	m.resetOverviewState()
 	m.sidebar.ClearConn()
 	m.results.Clear()
 	_ = m.saveTabStatesNow()
@@ -1498,11 +1923,17 @@ func (m *Model) switchToConnection(name string) tea.Cmd {
 	if saved, ok := m.sessions[name]; ok {
 		m.saveCurrentSession()
 		m.activateSession(name, saved)
-		cmd := m.sidebarConnCmd(saved.conn, name)
-		if saved.conn.Type() == config.TypePostgres {
-			return tea.Batch(cmd, m.loadDatabasesCmd(sessionBase(name), saved.conn))
+		cmds := make([]tea.Cmd, 0, 3)
+		if cmd := m.sidebarConnCmd(saved.conn, name); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
-		return cmd
+		if saved.conn.Type() == config.TypePostgres {
+			cmds = append(cmds, m.loadDatabasesCmd(sessionBase(name), saved.conn))
+		}
+		if sessionDatabase(name) != "" && sidebar.SupportsDatabases(saved.conn.Type()) && saved.context == contextTables {
+			cmds = append(cmds, m.loadOverviewCmd())
+		}
+		return tea.Batch(cmds...)
 	}
 	m.saveCurrentSession()
 	m.resetSession()
@@ -1521,6 +1952,8 @@ func (m *Model) saveCurrentSession() {
 	m.cancelMutation()
 	m.running = false
 	m.querySeq++
+	m.overviewSeq++
+	m.versionSeq++
 	m.syncActiveTab()
 	tabs := append([]editorTab(nil), m.tabs...)
 	m.sessions[m.connName] = &session{
@@ -1533,6 +1966,10 @@ func (m *Model) saveCurrentSession() {
 		pager:        m.pager,
 		tabs:         tabs,
 		activeTab:    m.activeTab,
+		context:      m.context,
+		overviewAll:  m.overviewAll,
+		filter:       m.overviewFilter,
+		cursor:       m.sidebar.CursorPath(),
 	}
 	_ = m.saveTabStatesNow()
 	m.syncSidebarSessions()
@@ -1547,6 +1984,7 @@ func (m *Model) activateSession(name string, saved *session) {
 	m.tableSchemas = saved.tableSchemas
 	m.editCache = saved.editCache
 	m.pager = saved.pager
+	m.context = saved.context
 	if len(saved.tabs) > 0 {
 		m.tabs = append([]editorTab(nil), saved.tabs...)
 		m.activeTab = saved.activeTab
@@ -1568,6 +2006,11 @@ func (m *Model) activateSession(name string, saved *session) {
 	m.pendingCmd = nil
 	m.running = false
 	m.querySeq++
+	m.resetOverviewState()
+	m.overviewAll = saved.overviewAll
+	m.overviewFilter = saved.filter
+	m.filterInput.SetValue(saved.filter)
+	m.sidebar.RestoreCursor(saved.cursor)
 	delete(m.sessions, name)
 	m.closeOverlays()
 	m.layout()
@@ -1581,6 +2024,8 @@ func (m *Model) resetSession() {
 	m.running = false
 	m.pendingCmd = nil
 	m.tabConnName = ""
+	m.context = contextQuery
+	m.resetOverviewState()
 	m.resetTabs()
 	m.results = results.New(m.t)
 	m.completer = ac.New()
@@ -1799,6 +2244,8 @@ func (m *Model) handleScriptDone(msg scriptDoneMsg) {
 	} else if msg.exec != nil {
 		m.results.SetExec(msg.exec.Affected, msg.exec.Elapsed)
 	}
+	m.context = contextQuery
+	m.pager = nil
 	m.setStatus(m.t.T(i18n.KeyStatusScript, msg.executed, msg.total, humanDuration(msg.elapsed)), false)
 }
 

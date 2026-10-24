@@ -13,9 +13,15 @@ import (
 	"github.com/LinduanTof/b-db/internal/ui/theme"
 )
 
+type tableSource struct {
+	schema string
+	table  string
+}
+
 type editorTab struct {
 	title  string
 	editor editor.Model
+	source tableSource
 }
 
 type tabSaveMsg struct {

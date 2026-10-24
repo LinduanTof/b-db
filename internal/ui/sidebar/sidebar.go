@@ -69,7 +69,11 @@ type ConnectMsg struct{ Name string }
 
 type DatabaseMsg struct{ Session string }
 
-type SelectTableMsg struct{ Schema, Table, Kind string }
+type TableActivateMsg struct{ Schema, Table, Kind string }
+
+type EditorOpenMsg struct{ Schema, Table, Kind string }
+
+type ConnectionInfoMsg struct{ Name string }
 
 type TableMenuMsg struct{ Schema, Table, Kind string }
 
@@ -94,6 +98,7 @@ type Model struct {
 	roots         []*Node
 	flat          []*Node
 	cursor        int
+	pendingCursor string
 	offset        int
 
 	lastClickIndex int
@@ -377,6 +382,7 @@ func (m *Model) ClearConn() {
 	m.conn = nil
 	m.connName = ""
 	m.currentLabel = ""
+	m.pendingCursor = ""
 	for _, root := range m.roots {
 		m.deactivateRoot(root)
 	}
@@ -476,11 +482,25 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "enter":
 		return m.activate()
+	case "m":
+		n := m.selected()
+		if n != nil && n.Kind == KindTable {
+			return func() tea.Msg {
+				return TableMenuMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
+			}
+		}
+	case "o":
+		n := m.selected()
+		if n != nil && n.Kind == KindTable {
+			return func() tea.Msg {
+				return EditorOpenMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
+			}
+		}
 	case "s":
 		n := m.selected()
 		if n != nil && n.Kind == KindTable {
 			return func() tea.Msg {
-				return SelectTableMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
+				return TableOpenMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
 			}
 		}
 	case "r":
@@ -496,26 +516,42 @@ func (m *Model) activate() tea.Cmd {
 	if n == nil {
 		return nil
 	}
-	if n.Kind == KindConnection && SupportsDatabases(n.Sub) {
-		if len(n.Children) == 0 && !m.isCurrentRoot(n.ConnName) {
+	if n.Kind == KindConnection {
+		if SupportsDatabases(n.Sub) && len(n.Children) == 0 && !m.isCurrentRoot(n.ConnName) {
 			name := n.ConnName
 			return func() tea.Msg { return ConnectMsg{Name: name} }
 		}
-		return m.toggle(n)
+		if !SupportsDatabases(n.Sub) && !m.isCurrentRoot(n.ConnName) {
+			name := n.ConnName
+			return func() tea.Msg { return ConnectMsg{Name: name} }
+		}
+		cmd := m.toggle(n)
+		if m.isCurrentRoot(n.ConnName) {
+			return withMsg(cmd, ConnectionInfoMsg{Name: n.ConnName})
+		}
+		return cmd
 	}
-	if n.Kind == KindConnection && !m.isCurrentRoot(n.ConnName) {
-		name := n.ConnName
-		return func() tea.Msg { return ConnectMsg{Name: name} }
-	}
-	if n.Kind == KindDatabase && n.SessionName != m.connName {
+	if n.Kind == KindDatabase {
 		session := n.SessionName
-		return func() tea.Msg { return DatabaseMsg{Session: session} }
+		open := func() tea.Msg { return DatabaseMsg{Session: session} }
+		if session == m.connName {
+			return withMsg(m.toggle(n), open())
+		}
+		return open
 	}
 	if n.Kind == KindTable {
 		schema, table, kind := n.Schema, n.Table, n.Sub
-		return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table, Kind: kind} }
+		return func() tea.Msg { return TableActivateMsg{Schema: schema, Table: table, Kind: kind} }
 	}
 	return m.toggle(n)
+}
+
+func withMsg(cmd tea.Cmd, msg tea.Msg) tea.Cmd {
+	wrapped := func() tea.Msg { return msg }
+	if cmd == nil {
+		return wrapped
+	}
+	return tea.Batch(cmd, wrapped)
 }
 
 func (m *Model) HandleClick(row int) tea.Cmd {
@@ -542,7 +578,7 @@ func (m *Model) HandleClick(row int) tea.Cmd {
 		if double {
 			schema, table, kind := node.Schema, node.Table, node.Sub
 			return func() tea.Msg {
-				return TableOpenMsg{Schema: schema, Table: table, Kind: kind}
+				return TableActivateMsg{Schema: schema, Table: table, Kind: kind}
 			}
 		}
 		return nil
@@ -667,6 +703,35 @@ func (m *Model) rebuild() {
 	} else if m.cursor >= len(m.flat) {
 		m.cursor = len(m.flat) - 1
 	}
+	if m.pendingCursor != "" {
+		for i, n := range m.flat {
+			if nodePath(n) == m.pendingCursor {
+				m.cursor = i
+				m.pendingCursor = ""
+				break
+			}
+		}
+	}
+}
+
+func nodePath(n *Node) string {
+	return fmt.Sprintf("%d|%s|%s|%s|%s|%s", n.Kind, n.ConnName, n.SessionName, n.Schema, n.Table, n.Label)
+}
+
+// CursorPath identifies the selected node so it can be restored after the
+// tree is rebuilt for another session.
+func (m *Model) CursorPath() string {
+	n := m.selected()
+	if n == nil {
+		return ""
+	}
+	return nodePath(n)
+}
+
+// RestoreCursor selects path once it appears in the tree. A path that does not
+// match yet is kept, because table and column nodes load asynchronously.
+func (m *Model) RestoreCursor(path string) {
+	m.pendingCursor = path
 }
 
 func (m *Model) View() string {

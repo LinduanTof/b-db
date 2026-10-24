@@ -43,11 +43,14 @@ go test ./...     # 需要 testdata/demo.db 已经存在
 - `View()` 返回 `tea.NewView(m.render())`,启用备用屏幕、单元格级鼠标事件和 Kitty 键盘增强协议(用于区分 `Ctrl+Enter` 与 `Enter`)。
 - 异步操作放在返回类型化消息的 `tea.Cmd` 闭包中(`connOpenedMsg`、`queryDoneMsg`、`tablePageDoneMsg`、`mutationDoneMsg` 等),处理器回到根模型执行。查询带 `querySeq` 序号,过期结果会被丢弃。
 - 表数据浏览与编辑器查询是两条独立路径:前者走 `pagination.go` 的 `runPageQuery`/`tablePageDoneMsg`,维护 `pagination` 并设置可编辑来源,不读写编辑器;后者走 `runQuery`/`queryDoneMsg`,只处理编辑器内容。两者共享结果面板,编辑器查询成功后会清除分页状态。
+- 侧栏 `↑`/`↓` 只移动光标,`Enter` 才激活节点。表节点激活(`sidebar.TableActivateMsg`)会新建或复用同名标签(`editorTab.source`)并预填 SQL,同时通过分页路径加载数据;`s` 只预览数据,`m` 打开表操作菜单,`o` 只写入编辑器而不执行。连接根激活显示连接信息,数据库节点激活显示表概览,二者通过 `Model.context`(`contextInfo`/`contextTables`/`contextData`/`contextQuery`)决定结果面板标题、提示和 `r` 的行为。
+- 表概览原始数据保存在 `overviewAll`,客户端过滤词在 `overviewFilter`;`rebuildOverview` 子串匹配前三列后重新注入结果面板。切换会话或断开时必须调用 `resetOverviewState`,否则旧概览会串到新连接;`r` 重新加载后会自动重新应用过滤词。服务端版本异步加载,`versionSeq` 防止旧连接的版本覆盖当前面板。
 - 布局是手动计算的:`layout()` 计算 `sideW`、`rightW`、`editorH`、`resultsH`;终端小于 20x6 时直接返回,小于 40x10 时渲染 "terminal too small" 提示。焦点模式有 `manual`(F2 切换缩放)和 `auto`(缩放跟随焦点,F2 暂停)。
-- 会话保存在 `map[string]*session` 中。切换连接时保存当前编辑器/结果/补全器/编辑缓存/标签/分页状态,并恢复目标会话。任何新的按连接保存的 UI 状态都必须加入 `saveCurrentSession` 和 `activateSession`,否则会在连接之间串数据。
+- 会话保存在 `map[string]*session` 中。切换连接时保存当前编辑器/结果/补全器/编辑缓存/标签/分页/结果面板上下文/概览数据与过滤词/侧栏光标,并恢复目标会话。任何新的按连接保存的 UI 状态都必须加入 `saveCurrentSession` 和 `activateSession`,否则会在连接之间串数据。
+- 侧栏光标用 `sidebar.CursorPath()`/`RestoreCursor(path)` 按节点路径恢复;`pendingCursor` 会保留到树中出现匹配节点,以覆盖表/列节点的异步加载。切换会话时仅当目标会话上次停留在 `contextTables` 才重新加载概览,否则保留上次的表数据或查询结果。
 - 侧栏的活动会话标记由 `syncSidebarSessions` 注入(`sessions` 的 key 加当前连接)。新增连接、断开、切换或重置会话后必须调用它,否则侧栏的 `●`/`◉` 状态和活动数量会过期。
 - PostgreSQL、MySQL、MongoDB 连接成功后会在连接节点下列出所有数据库,并在内存中克隆出 `<连接名>/<数据库名>` 派生会话;每个数据库是独立会话。`SupportsDatabases` 决定哪些类型使用数据库列表,`databaseIsSchema` 决定数据库节点下直接加载表(MySQL/MongoDB)还是 schema(PostgreSQL)。数据库列表在连接切换后保留,点击连接根只展开列表,点击数据库节点才切换会话。派生配置只存在于 `cfg.Connections` 中,不写入运行时连接文件。数据库发现由 `db.DatabaseLister` 可选接口完成。
-- SQL 编辑器支持按连接隔离的多标签(`tabs.go`);标签内容通过 `tab_state.go` 自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`(0600,临时文件 + rename)。新增标签字段时同步修改 `savedTab`/`savedTabs` 与 `collectTabStates`。
+- SQL 编辑器支持按连接隔离的多标签(`tabs.go`);标签内容通过 `tab_state.go` 自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`(0600,临时文件 + rename)。新增需要持久化的标签字段时同步修改 `savedTab`/`savedTabs` 与 `collectTabStates`;仅内存使用的 `editorTab.source` 故意不持久化,重启后表标签去重不会命中。
 - 编辑器获得焦点时 `q` 不退出;`Ctrl+C` 始终退出。浮层打开时 `q` 退出,其他按键先交给浮层处理。
 
 ### UI 组件(`internal/ui/*`)
@@ -72,6 +75,8 @@ func (m *Model) View() string
 - SQL(PostgreSQL/MySQL/SQLite)共用 `internal/db/sql`;各数据库差异通过 `catalog.go` 中的分支实现。标识符引用/占位符在 `internal/db/dialect`。SQLite 使用纯 Go 的 `modernc.org/sqlite`,因此发布时可以 `CGO_ENABLED=0`;`:memory:` 数据库会强制单连接,避免连接池中每个连接看到独立的内存库。
 - `internal/query/executor.go` 根据顶层语句类型选择 `Query` 或 `Exec`:识别 `WITH` 的 CTE 体、`RETURNING`、括号包裹的查询以及 PostgreSQL dollar-quoting。`query.IsWrite` 用于只读连接的保守写入拦截。Redis/Mongo 设置 `AlwaysQuery`,因为它们所谓的 "SQL" 实际是命令前端。
 - 只有从表视图打开、且表有主键的结果才允许编辑。SQL 写入在事务中执行,影响行数必须恰好为 1;预览 SQL 通过 dialect 生成。`read_only: true` 会在 app 层阻止单元格编辑和 SQL 写入语句,但这是保守的客户端检查,不能替代数据库侧的只读账号。
+- 可选能力通过接口断言实现,不要把它们加进 `Conn`:服务端版本用 `db.Versioner`,表统计用 `db.TableStatProvider`(PG/MySQL 实现,SQLite 返回 nil)。统计包含行数估算、大小、列数与表注释;失败只降级为 `-`,不影响表列表。
+- 表概览的原始行结构固定为 `schema/表名/类型/行数/大小/列数/注释`,`overviewAll` 与过滤都基于这个结构;渲染时 `typeHasSchema` 为 false 的连接(MySQL/MongoDB)去掉首列,避免重复展示数据库名。
 - Redis 支持 `SCAN 0 COUNT 50`、`GET "key"` 等命令;Mongo 支持 `find db.collection [json]`、`findOne`、`aggregate`、`count`。二者都不支持写入(`Mutator()` 返回 `nil`)。
 
 ### 配置与持久化状态

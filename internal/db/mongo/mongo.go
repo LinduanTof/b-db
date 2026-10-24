@@ -87,6 +87,19 @@ func (c *conn) Querier() db.Querier { return querier{c: c} }
 
 func (c *conn) Mutator() db.Mutator { return nil }
 
+func (c *conn) Version(ctx context.Context) (string, error) {
+	var info bson.M
+	command := bson.D{{Key: "buildInfo", Value: 1}}
+	if err := c.client.Database("admin").RunCommand(ctx, command).Decode(&info); err != nil {
+		return "", err
+	}
+	version, _ := info["version"].(string)
+	if version == "" {
+		return "", fmt.Errorf("mongo version not found")
+	}
+	return version, nil
+}
+
 type catalog struct{ c *conn }
 
 func (c catalog) Databases(ctx context.Context) ([]string, error) {
