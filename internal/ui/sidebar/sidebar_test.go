@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LinduanTof/b-db/internal/config"
@@ -131,9 +132,36 @@ func TestTableSingleClickSelectsDoubleClickOpens(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("double click on a table should open it")
 	}
-	msg, ok := cmd().(TableOpenMsg)
+	msg, ok := cmd().(TableActivateMsg)
 	if !ok || msg.Schema != "main" || msg.Table != "users" {
 		t.Fatalf("message = %#v", cmd())
+	}
+}
+
+func TestMySQLDatabaseTree(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "my", Type: config.TypeMySQL, Host: "h", User: "u"},
+	}, i18n.New("en"))
+	m.SetSize(40, 12)
+	m.SetDatabases("my", []DatabaseEntry{
+		{Name: "app", Session: "my/app"},
+		{Name: "report", Session: "my/report"},
+	})
+	if cmd := m.SetDatabaseConn(fakeConn{name: "my/app", typ: config.TypeMySQL}, "my", "app", "my/app"); cmd == nil {
+		t.Fatal("selecting a MySQL database should load its tables")
+	}
+	var database *Node
+	for _, node := range m.roots[0].Children {
+		if node.Kind == KindDatabase && node.Label == "app" {
+			database = node
+		}
+	}
+	if database == nil || database.Schema != "app" || !database.Expanded {
+		t.Fatalf("database node = %#v", database)
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "▾ ● ▤ app") || !strings.Contains(view, "▸ ○ ▤ report") {
+		t.Fatalf("view missing database tree:\n%s", view)
 	}
 }
 
@@ -168,5 +196,113 @@ func TestStaleLoadResultIsIgnored(t *testing.T) {
 	m.Update(SchemasLoadedMsg{Epoch: 2, Node: node, Schemas: []string{"current"}})
 	if node.Loading || len(node.Children) != 1 {
 		t.Fatalf("current message not applied: %+v", node)
+	}
+}
+
+func TestTableKeys(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "local", Type: config.TypeSQLite, Path: "x.db"},
+	}, i18n.New("en"))
+	m.SetSize(30, 10)
+	table := &Node{Kind: KindTable, Label: "users", Sub: "table", ConnName: "local", Schema: "main", Table: "users"}
+	schema := &Node{Kind: KindSchema, Label: "main", ConnName: "local", Schema: "main", Expanded: true, Children: []*Node{table}}
+	m.roots[0].Expanded = true
+	m.roots[0].Children = []*Node{schema}
+	m.rebuild()
+	m.cursor = 2
+	m.rebuild()
+
+	check := func(key tea.KeyPressMsg, want func(tea.Msg) bool) {
+		t.Helper()
+		_, cmd := m.Update(key)
+		if cmd == nil {
+			t.Fatalf("%q did not produce a command", key.String())
+		}
+		if msg := cmd(); !want(msg) {
+			t.Fatalf("%q produced %#v", key.String(), msg)
+		}
+	}
+
+	check(tea.KeyPressMsg{Code: 's'}, func(msg tea.Msg) bool { _, ok := msg.(TableOpenMsg); return ok })
+	check(tea.KeyPressMsg{Code: 'm'}, func(msg tea.Msg) bool { _, ok := msg.(NodeMenuMsg); return ok })
+	check(tea.KeyPressMsg{Code: 'o'}, func(msg tea.Msg) bool { _, ok := msg.(EditorOpenMsg); return ok })
+	check(tea.KeyPressMsg{Code: tea.KeyEnter}, func(msg tea.Msg) bool { _, ok := msg.(TableActivateMsg); return ok })
+}
+
+func TestCursorPathRestore(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "local", Type: config.TypeSQLite, Path: "x.db"},
+	}, i18n.New("en"))
+	m.SetSize(30, 10)
+	table := &Node{Kind: KindTable, Label: "users", Sub: "table", ConnName: "local", Schema: "main", Table: "users"}
+	schema := &Node{Kind: KindSchema, Label: "main", ConnName: "local", Schema: "main", Expanded: true, Children: []*Node{table}}
+	m.roots[0].Expanded = true
+	m.roots[0].Children = []*Node{schema}
+	m.rebuild()
+	m.cursor = 2
+
+	path := m.CursorPath()
+	if path == "" {
+		t.Fatal("empty cursor path")
+	}
+	m.cursor = 0
+	m.RestoreCursor(path)
+	m.rebuild()
+	n := m.selected()
+	if n == nil || n.Kind != KindTable || n.Table != "users" {
+		t.Fatalf("restored node = %#v", n)
+	}
+}
+
+func TestCursorPathWaitsForAsyncChildren(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "local", Type: config.TypeSQLite, Path: "x.db"},
+	}, i18n.New("en"))
+	m.SetSize(30, 10)
+	table := &Node{Kind: KindTable, Label: "users", Sub: "table", ConnName: "local", Schema: "main", Table: "users"}
+	path := nodePath(table)
+
+	m.roots[0].Expanded = true
+	m.RestoreCursor(path)
+	m.rebuild()
+	if m.pendingCursor == "" {
+		t.Fatal("pending path should survive a rebuild without the node")
+	}
+
+	schema := &Node{Kind: KindSchema, Label: "main", ConnName: "local", Schema: "main", Expanded: true, Children: []*Node{table}}
+	m.roots[0].Children = []*Node{schema}
+	m.rebuild()
+	if n := m.selected(); n == nil || n.Table != "users" {
+		t.Fatalf("node after async load = %#v", n)
+	}
+	if m.pendingCursor != "" {
+		t.Fatalf("pending path = %q, want cleared", m.pendingCursor)
+	}
+}
+
+func TestCollapseSession(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "pg", Type: config.TypePostgres, Host: "h", User: "u", Database: "postgres"},
+	}, i18n.New("en"))
+	m.SetSize(30, 10)
+	root := m.roots[0]
+	root.Expanded = true
+	database := &Node{Kind: KindDatabase, Label: "app", ConnName: "pg", SessionName: "pg/app", Expanded: true}
+	root.Children = []*Node{database}
+	m.rebuild()
+
+	m.CollapseSession("pg/app")
+	if database.Expanded {
+		t.Fatal("database node should collapse")
+	}
+	if !root.Expanded {
+		t.Fatal("closing a database session should keep the connection expanded")
+	}
+
+	root.Expanded = true
+	database.Expanded = true
+	m.CollapseSession("pg")
+	if root.Expanded || database.Expanded {
+		t.Fatalf("connection collapse: root=%v database=%v", root.Expanded, database.Expanded)
 	}
 }

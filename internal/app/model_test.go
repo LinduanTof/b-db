@@ -76,7 +76,8 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			completionTablesMsg, completionColumnsMsg, uicomplete.AcceptedMsg, connection.SubmittedMsg,
 			editInfoMsg, mutationDoneMsg, celledit.SubmittedMsg, confirm.ConfirmedMsg,
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
-			sidebar.ConnectMsg, sidebar.SelectTableMsg, sidebar.TableMenuMsg, sidebar.TableOpenMsg,
+			sidebar.ConnectMsg, sidebar.TableOpenMsg,
+			sidebar.TableActivateMsg, sidebar.EditorOpenMsg, sidebar.ConnectionInfoMsg, sidebar.NodeMenuMsg, overviewLoadedMsg, versionLoadedMsg,
 			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg:
 		default:
 			return m
@@ -112,7 +113,7 @@ func TestEscOpensOptionsMenu(t *testing.T) {
 		t.Fatal("esc should open the options menu")
 	}
 	content := m.View().Content
-	for _, want := range []string{"Options", "Actions", "Settings", "Theme", "Language"} {
+	for _, want := range []string{"Options", "ACTIONS", "SETTINGS", "Theme", "Language"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("menu missing %q:\n%s", want, content)
 		}
@@ -477,8 +478,8 @@ func TestAddConnectionSavesCurrentSession(t *testing.T) {
 	if m.connName != "second" || m.conn == nil {
 		t.Fatalf("connection = %q, status=%s", m.connName, m.status)
 	}
-	if m.editor.Value() != "" || m.results.Result() != nil {
-		t.Fatalf("new session should start clean: editor=%q results=%#v", m.editor.Value(), m.results.Result())
+	if m.editor.Value() != "" || m.context != contextInfo {
+		t.Fatalf("new session should start clean: editor=%q context=%v", m.editor.Value(), m.context)
 	}
 	if view := ansi.Strip(m.sidebar.View()); !strings.Contains(view, "2 active") {
 		t.Fatalf("sidebar should show two active sessions:\n%s", view)
@@ -535,7 +536,7 @@ func TestTableActionsMenu(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'm'})
 	if !m.tableMenu.IsOpen() {
 		t.Fatalf("table menu should open, status=%s", m.status)
 	}
@@ -576,7 +577,7 @@ func TestTableDataAction(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'm'})
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	rs := m.results.Result()
@@ -625,7 +626,7 @@ func TestTableIndexesAction(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'm'})
 	for i := 0; i < 3; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
@@ -687,6 +688,111 @@ func TestPostgresDatabaseDiscovery(t *testing.T) {
 	}
 }
 
+func TestMySQLDatabaseDiscovery(t *testing.T) {
+	m := testModel(t, "en")
+	mysql := config.Connection{
+		Name:     "my",
+		Type:     config.TypeMySQL,
+		Host:     "h",
+		User:     "u",
+		Password: "p",
+		ReadOnly: true,
+	}
+	m.cfg.Connections = append(m.cfg.Connections, mysql)
+	m.sidebar.AddConnection(mysql)
+	if cmd := m.handleDatabasesLoaded(databasesLoadedMsg{
+		id:        m.connectSeq,
+		base:      "my",
+		databases: []string{"app", "report"},
+	}); cmd != nil {
+		t.Fatal("database discovery should not return a command")
+	}
+	for _, name := range []string{"app", "report"} {
+		logical := "my/" + name
+		connection := m.cfg.Find(logical)
+		if connection == nil || connection.Database != name || !connection.ReadOnly {
+			t.Fatalf("connection %q = %#v", logical, connection)
+		}
+	}
+	view := ansi.Strip(m.sidebar.View())
+	for _, want := range []string{"my", "app", "report"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("sidebar missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestCloseSessionShortcut(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl | tea.ModShift})
+	if m.conn != nil || m.connName != "" {
+		t.Fatalf("session should be closed: conn=%v name=%q", m.conn, m.connName)
+	}
+	if !strings.Contains(m.status, "Disconnected") {
+		t.Fatalf("status = %q", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl | tea.ModShift})
+	if !strings.Contains(m.status, "No connection") {
+		t.Fatalf("status = %q", m.status)
+	}
+}
+
+func TestDisconnectKeepsOtherSessions(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.shutdown()
+
+	data, err := os.ReadFile(m.cfg.Connections[0].Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "second.db")
+	if err := os.WriteFile(secondPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m = runCmd(t, m, m.addConnection(config.Connection{
+		Name: "second",
+		Type: config.TypeSQLite,
+		Path: secondPath,
+	}))
+	if m.connName != "second" || m.conn == nil {
+		t.Fatalf("connection = %q, status=%s", m.connName, m.status)
+	}
+
+	m.disconnect()
+	if m.conn != nil || m.connName != "" {
+		t.Fatalf("current session should be closed: conn=%v name=%q", m.conn, m.connName)
+	}
+	if _, ok := m.sessions["local-sqlite"]; !ok {
+		t.Fatal("other sessions should remain open")
+	}
+	if _, ok := m.sessions["second"]; ok {
+		t.Fatal("current session should be removed")
+	}
+
+	m = runCmd(t, m, m.switchToConnection("local-sqlite"))
+	if m.connName != "local-sqlite" || m.conn == nil {
+		t.Fatalf("connection = %q", m.connName)
+	}
+}
+
+func TestSidebarShortcutHint(t *testing.T) {
+	m := testModel(t, "en")
+	m.layout()
+	if hint := m.sidebarHint(m.sideW); !strings.Contains(hint, "⏎") {
+		t.Fatalf("compact hint = %q", hint)
+	}
+	if content := m.View().Content; !strings.Contains(content, "⏎") {
+		t.Fatalf("sidebar hint missing from view:\n%s", content)
+	}
+	m.width = 200
+	m.layout()
+	if hint := m.sidebarHint(m.sideW); hint != m.t.T(i18n.KeyHintSidebar) {
+		t.Fatalf("wide hint = %q", hint)
+	}
+}
+
 func TestStatusbarSections(t *testing.T) {
 	m := testModel(t, "en")
 	m = connect(t, m)
@@ -698,13 +804,10 @@ func TestStatusbarSections(t *testing.T) {
 
 	m.focus = focusResults
 	left := m.statusLeft()
-	for _, want := range []string{"Results", "Query 1", "│"} {
+	for _, want := range []string{"Results", "Query 1", "│", "local-sqlite"} {
 		if !strings.Contains(left, want) {
 			t.Fatalf("status left = %q, missing %q", left, want)
 		}
-	}
-	if strings.Contains(left, "local-sqlite") {
-		t.Fatalf("status left should not repeat the connection: %q", left)
 	}
 	sidebarView := ansi.Strip(m.sidebar.View())
 	for _, want := range []string{"● local-sqlite", "1 active"} {
@@ -756,7 +859,7 @@ func TestMouseDoubleClickOpensTable(t *testing.T) {
 
 	model, cmd = m.Update(tea.MouseClickMsg{X: 3, Y: 4, Button: tea.MouseLeft})
 	m = runCmd(t, model.(*Model), cmd)
-	if m.results.Result() != nil {
+	if m.focus != focusSidebar || m.context != contextInfo {
 		t.Fatal("single click should only select the table")
 	}
 
@@ -767,6 +870,9 @@ func TestMouseDoubleClickOpensTable(t *testing.T) {
 	}
 	if m.focus != focusResults {
 		t.Fatalf("focus = %v, want results", m.focus)
+	}
+	if m.context != contextData {
+		t.Fatalf("context = %v, want data", m.context)
 	}
 }
 
@@ -886,7 +992,7 @@ func TestAutoFocusLayout(t *testing.T) {
 func TestMenuFocusLayout(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -1272,11 +1378,14 @@ func TestSidebarBrowseAndSelect(t *testing.T) {
 		t.Fatalf("sidebar should list tables:\n%s", m.sidebar.View())
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Code: 's'})
-	if m.focus != focusEditor {
-		t.Fatalf("focus = %v, want editor after select", m.focus)
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results after preview", m.focus)
 	}
-	if got := m.editor.Value(); !strings.Contains(got, "users") {
-		t.Fatalf("editor value = %q", got)
+	if m.results.Result() == nil {
+		t.Fatalf("preview should load table data, status=%s", m.status)
+	}
+	if got := m.editor.Value(); strings.Contains(got, "users") {
+		t.Fatalf("preview should not touch the editor, got %q", got)
 	}
 }
 
@@ -1506,5 +1615,631 @@ func TestStaleConnectionResponseIgnored(t *testing.T) {
 	})
 	if m.status != "current" {
 		t.Fatalf("stale response changed status to %q", m.status)
+	}
+}
+
+func TestInitDoesNotAutoConnect(t *testing.T) {
+	m := testModel(t, "en")
+	if cmd := m.Init(); cmd != nil {
+		t.Fatal("Init should not connect automatically")
+	}
+}
+
+func TestShutdownClosesAllSessions(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	current := m.conn
+
+	background, err := db.Open(context.Background(), db.Config{
+		Name:   "background",
+		Type:   "sqlite",
+		Params: map[string]string{"path": ":memory:"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := background.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["background"] = &session{conn: background}
+
+	m.Shutdown()
+	m.Shutdown() // must be safe to call twice
+
+	for name, conn := range map[string]db.Conn{"current": current, "background": background} {
+		if err := conn.Ping(context.Background()); err == nil {
+			t.Fatalf("%s connection is still open after Shutdown", name)
+		}
+	}
+	if len(m.sessions) != 0 {
+		t.Fatalf("sessions = %d after Shutdown, want 0", len(m.sessions))
+	}
+}
+
+func TestConnectionInfoPanel(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	if m.context != contextInfo {
+		t.Fatalf("context = %v, want info", m.context)
+	}
+	rs := m.results.Result()
+	if rs == nil {
+		t.Fatal("connection info missing")
+	}
+	values := map[string]string{}
+	for _, row := range rs.Rows {
+		if len(row) < 2 {
+			continue
+		}
+		key, _ := row[0].(string)
+		value, _ := row[1].(string)
+		values[key] = value
+	}
+	if values["Name"] != "local-sqlite" {
+		t.Fatalf("name = %q", values["Name"])
+	}
+	if values["Status"] != m.t.T(i18n.KeyStatusConnected) {
+		t.Fatalf("status = %q", values["Status"])
+	}
+}
+
+func TestDatabaseOverview(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.connName = "local-sqlite/main"
+	m = runCmd(t, m, m.loadOverviewCmd())
+	if m.context != contextTables {
+		t.Fatalf("context = %v, want tables", m.context)
+	}
+	rs := m.results.Result()
+	if rs == nil {
+		t.Fatal("overview missing")
+	}
+	found := false
+	for _, row := range rs.Rows {
+		if len(row) >= 2 {
+			if name, _ := row[1].(string); name == "users" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("overview missing users: %#v", rs.Rows)
+	}
+}
+
+func TestEnterTableOpensTabAndData(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for i := 0; i < 3; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	tabs := len(m.tabs)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.tabs) != tabs+1 {
+		t.Fatalf("tabs = %d, want %d", len(m.tabs), tabs+1)
+	}
+	if got := m.editor.Value(); !strings.Contains(got, "users") {
+		t.Fatalf("editor = %q", got)
+	}
+	if m.context != contextData || m.focus != focusResults {
+		t.Fatalf("context = %v, focus = %v", m.context, m.focus)
+	}
+	if m.results.Result() == nil {
+		t.Fatalf("results missing, status=%s", m.status)
+	}
+
+	m.focus = focusSidebar
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.tabs) != tabs+1 {
+		t.Fatalf("opening the same table should reuse its tab, tabs = %d", len(m.tabs))
+	}
+	if got := m.editor.Value(); !strings.Contains(got, "users") {
+		t.Fatalf("editor after reuse = %q", got)
+	}
+}
+
+func TestConnectionInfoShowsVersion(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	if m.infoVersion == "" || m.infoVersion == "-" {
+		t.Fatalf("version = %q", m.infoVersion)
+	}
+	if m.results.Result() == nil {
+		t.Fatal("connection info missing")
+	}
+}
+
+func TestOverviewColumnsAndStats(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.connName = "local-sqlite/main"
+	m = runCmd(t, m, m.loadOverviewCmd())
+	rs := m.results.Result()
+	if rs == nil {
+		t.Fatal("overview missing")
+	}
+	if len(rs.Columns) != 7 {
+		t.Fatalf("columns = %d, want 7", len(rs.Columns))
+	}
+	for _, row := range rs.Rows {
+		if len(row) != 7 {
+			t.Fatalf("row = %#v, want 7 values", row)
+		}
+		if row[1] == "users" {
+			for _, index := range []int{3, 4, 5, 6} {
+				if row[index] != "-" {
+					t.Fatalf("sqlite stat column %d = %#v, want -", index, row[index])
+				}
+			}
+		}
+	}
+}
+
+func TestOverviewFilter(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.connName = "local-sqlite/main"
+	m = runCmd(t, m, m.loadOverviewCmd())
+	if m.context != contextTables {
+		t.Fatalf("context = %v", m.context)
+	}
+	all := len(m.overviewAll)
+	if all == 0 {
+		t.Fatal("no tables in overview")
+	}
+
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Code: '/'})
+	if !m.filtering {
+		t.Fatal("filter input should open")
+	}
+	for _, char := range "users" {
+		m = sendKey(t, m, tea.KeyPressMsg{Text: string(char)})
+	}
+	rs := m.results.Result()
+	if rs == nil || len(rs.Rows) == 0 || len(rs.Rows) >= all {
+		t.Fatalf("filtered rows = %d, all = %d", len(rs.Rows), all)
+	}
+	for _, row := range rs.Rows {
+		if name, _ := row[1].(string); !strings.Contains(name, "users") {
+			t.Fatalf("filtered row = %#v", row)
+		}
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.filtering || m.overviewFilter != "" {
+		t.Fatalf("filter still active: %v %q", m.filtering, m.overviewFilter)
+	}
+	if got := len(m.results.Result().Rows); got != all {
+		t.Fatalf("rows after clearing filter = %d, want %d", got, all)
+	}
+}
+
+func TestSessionRestoresOverviewState(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.connName = "local-sqlite/main"
+	m = runCmd(t, m, m.loadOverviewCmd())
+	m.overviewFilter = "users"
+	m.rebuildOverview()
+	filtered := len(m.results.Result().Rows)
+
+	m.saveCurrentSession()
+	saved, ok := m.sessions["local-sqlite/main"]
+	if !ok {
+		t.Fatal("session was not saved")
+	}
+	m.resetSession()
+	m.activateSession("local-sqlite/main", saved)
+
+	if m.context != contextTables {
+		t.Fatalf("context = %v", m.context)
+	}
+	if m.overviewFilter != "users" {
+		t.Fatalf("filter = %q", m.overviewFilter)
+	}
+	if len(m.overviewAll) == 0 {
+		t.Fatal("overview rows were not restored")
+	}
+	if got := len(m.results.Result().Rows); got != filtered {
+		t.Fatalf("restored rows = %d, want %d", got, filtered)
+	}
+}
+
+func TestBreadcrumbAfterTableOpen(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	for i := 0; i < 3; i++ {
+		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	left := m.statusLeft()
+	if !strings.Contains(left, "local-sqlite / users") {
+		t.Fatalf("status left = %q", left)
+	}
+}
+
+func TestOverviewSchemaColumn(t *testing.T) {
+	cases := map[string]bool{
+		config.TypePostgres: true,
+		config.TypeSQLite:   true,
+		config.TypeMySQL:    false,
+		config.TypeMongo:    false,
+		config.TypeRedis:    false,
+	}
+	for typ, want := range cases {
+		if got := typeHasSchema(typ); got != want {
+			t.Fatalf("typeHasSchema(%q) = %v, want %v", typ, got, want)
+		}
+	}
+}
+
+func TestOverviewEnterOpensTableData(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.connName = "local-sqlite/main"
+	m = runCmd(t, m, m.loadOverviewCmd())
+	m.focus = focusResults
+
+	row, ok := m.results.CursorRow()
+	if !ok || len(row) < 2 {
+		t.Fatalf("overview cursor row = %#v", row)
+	}
+	want, _ := row[1].(string)
+	if want == "" {
+		t.Fatalf("overview cursor row = %#v", row)
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.context != contextData {
+		t.Fatalf("context = %v, want data", m.context)
+	}
+	if m.pager == nil || m.pager.table != want {
+		t.Fatalf("pager table = %#v, want %q", m.pager, want)
+	}
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v", m.focus)
+	}
+}
+
+func TestLayoutMenuChoice(t *testing.T) {
+	m := testModel(t, "en")
+	m.layout()
+	stackedEditorH := m.editorH
+	stackedResultsH := m.resultsH
+
+	m.applyMenuChange(menu.ChangedMsg{ID: "layout", Value: 1})
+	if m.layoutMode != config.LayoutColumns || !m.columnsActive {
+		t.Fatalf("columns layout not active: mode=%q active=%v", m.layoutMode, m.columnsActive)
+	}
+	if m.editorW <= 0 || m.resultsW <= 0 {
+		t.Fatalf("editorW=%d resultsW=%d", m.editorW, m.resultsW)
+	}
+
+	m.applyMenuChange(menu.ChangedMsg{ID: "layout", Value: 2})
+	if m.layoutMode != config.LayoutResultsTop || m.columnsActive {
+		t.Fatalf("results-top layout not active: mode=%q active=%v", m.layoutMode, m.columnsActive)
+	}
+	if m.editorH != stackedResultsH || m.resultsH != stackedEditorH {
+		t.Fatalf("heights not swapped: editor=%d results=%d", m.editorH, m.resultsH)
+	}
+
+	m.applyMenuChange(menu.ChangedMsg{ID: "layout", Value: 0})
+	if m.layoutMode != config.LayoutStacked {
+		t.Fatalf("mode = %q", m.layoutMode)
+	}
+	if m.editorH != stackedEditorH || m.resultsH != stackedResultsH {
+		t.Fatalf("stacked heights = %d/%d, want %d/%d", m.editorH, m.resultsH, stackedEditorH, stackedResultsH)
+	}
+}
+
+func TestColumnsLayoutViewWidth(t *testing.T) {
+	m := testModel(t, "en")
+	m.layoutMode = config.LayoutColumns
+	m.layout()
+	if !m.columnsActive {
+		t.Fatal("columns layout not active")
+	}
+	for _, line := range strings.Split(m.View().Content, "\n") {
+		if got := ansi.StringWidth(line); got != m.width {
+			t.Fatalf("line width = %d, want %d: %q", got, m.width, line)
+		}
+	}
+}
+
+func TestConnectionNodeMenu(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'm'})
+	if !m.tableMenu.IsOpen() {
+		t.Fatalf("menu should open for a connection node, status=%s", m.status)
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "Connect") {
+		t.Fatalf("connection menu missing Connect:\n%s", ansi.Strip(m.View().Content))
+	}
+}
+
+func TestNodeMenuItemsPerKind(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	connection := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindConnection, ConnName: "local-sqlite"})
+	if len(connection) != 3 {
+		t.Fatalf("connection items = %d, want 3", len(connection))
+	}
+	database := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindDatabase, Label: "main", SessionName: "local-sqlite/main"})
+	if len(database) != 9 {
+		t.Fatalf("database items = %d, want 9", len(database))
+	}
+	if database[0].ID != "db.open" || database[2].ID != "db.close" || database[4].ID != "db.export.sql" {
+		t.Fatalf("database items = %#v", database)
+	}
+	table := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindTable, Schema: "main", Table: "users", Sub: "table"})
+	if len(table) != 12 || table[0].ID != "table.data" || table[7].ID != "table.export.sql" {
+		t.Fatalf("table items = %#v", table)
+	}
+}
+
+func TestCloseSession(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	background, err := db.Open(context.Background(), db.Config{
+		Name:   "other",
+		Type:   "sqlite",
+		Params: map[string]string{"path": ":memory:"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := background.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["other"] = &session{conn: background}
+
+	m.closeSession("other")
+	if _, ok := m.sessions["other"]; ok {
+		t.Fatal("session was not removed")
+	}
+	if err := background.Ping(context.Background()); err == nil {
+		t.Fatal("connection is still open after closeSession")
+	}
+}
+
+func TestExportTableSQL(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.outDir = t.TempDir()
+	m = runCmd(t, m, m.exportTableCmd("main", "users", "sql"))
+
+	entries, err := os.ReadDir(m.outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("files = %d, want 1", len(entries))
+	}
+	data, err := os.ReadFile(filepath.Join(m.outDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "CREATE TABLE") || !strings.Contains(string(data), "INSERT INTO") {
+		t.Fatalf("SQL dump:\n%s", data)
+	}
+}
+
+func TestExportDatabaseSQL(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	base := m.cfg.Find("local-sqlite")
+	if base == nil {
+		t.Fatal("missing base connection")
+	}
+	derived := *base
+	derived.Name = "local-sqlite/main"
+	derived.Database = "main"
+	m.cfg.Connections = append(m.cfg.Connections, derived)
+	m.connName = "local-sqlite/main"
+	m.outDir = t.TempDir()
+
+	m = runCmd(t, m, m.exportDatabaseCmd("local-sqlite/main", "sql"))
+	entries, err := os.ReadDir(m.outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("files = %d, want 1", len(entries))
+	}
+	data, err := os.ReadFile(filepath.Join(m.outDir, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "users") || !strings.Contains(string(data), "INSERT INTO") {
+		t.Fatalf("database SQL dump:\n%s", data)
+	}
+}
+
+func TestExportProgress(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	m.outDir = t.TempDir()
+
+	var messages []tea.Msg
+	m.SetSender(func(msg tea.Msg) { messages = append(messages, msg) })
+	m = runCmd(t, m, m.exportTableCmd("main", "users", "sql"))
+	if len(messages) != 1 {
+		t.Fatalf("progress messages = %d, want 1", len(messages))
+	}
+	progress, ok := messages[0].(exportProgressMsg)
+	if !ok || progress.label != "users" || progress.total != 0 {
+		t.Fatalf("progress = %#v", messages[0])
+	}
+
+	model, _ := m.Update(progress)
+	m = model.(*Model)
+	if !m.exporting {
+		t.Fatal("exporting flag not set")
+	}
+	if !strings.Contains(m.status, "users") {
+		t.Fatalf("status = %q", m.status)
+	}
+	model, _ = m.Update(exportedMsg{path: "/tmp/out.sql"})
+	m = model.(*Model)
+	if m.exporting {
+		t.Fatal("exporting flag not cleared")
+	}
+}
+
+func TestExportDatabaseProgress(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	base := m.cfg.Find("local-sqlite")
+	if base == nil {
+		t.Fatal("missing base connection")
+	}
+	derived := *base
+	derived.Name = "local-sqlite/main"
+	derived.Database = "main"
+	m.cfg.Connections = append(m.cfg.Connections, derived)
+	m.connName = "local-sqlite/main"
+	m.outDir = t.TempDir()
+
+	var messages []tea.Msg
+	m.SetSender(func(msg tea.Msg) { messages = append(messages, msg) })
+	m = runCmd(t, m, m.exportDatabaseCmd("local-sqlite/main", "sql"))
+	if len(messages) < 2 {
+		t.Fatalf("progress messages = %d, want at least 2", len(messages))
+	}
+	last, ok := messages[len(messages)-1].(exportProgressMsg)
+	if !ok || last.total == 0 || last.done != last.total {
+		t.Fatalf("last progress = %#v", messages[len(messages)-1])
+	}
+}
+
+func TestDisconnectConnectionClosesDerivedSessions(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	other, err := db.Open(context.Background(), db.Config{
+		Name:   "local-sqlite/other",
+		Type:   "sqlite",
+		Params: map[string]string{"path": ":memory:"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["local-sqlite/other"] = &session{conn: other}
+
+	m.disconnectConnection("local-sqlite")
+	if _, ok := m.sessions["local-sqlite/other"]; ok {
+		t.Fatal("derived session was not removed")
+	}
+	if err := other.Ping(context.Background()); err == nil {
+		t.Fatal("derived connection is still open")
+	}
+	if m.connName != "" {
+		t.Fatalf("current session = %q, want empty", m.connName)
+	}
+}
+
+func TestMenuMouseClickOutsideCloses(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if !m.options.IsOpen() {
+		t.Fatal("options menu should open")
+	}
+	model, _ := m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.options.IsOpen() {
+		t.Fatal("click outside should close the menu")
 	}
 }

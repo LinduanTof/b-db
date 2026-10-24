@@ -63,7 +63,12 @@ func main() {
 		model.SetInitialScript(flag.Arg(0))
 	}
 	program := tea.NewProgram(model)
-	if _, err := program.Run(); err != nil {
+	model.SetSender(func(msg tea.Msg) { program.Send(msg) })
+	_, err = program.Run()
+	// Bubble Tea handles SIGINT/SIGTERM by quitting without routing through
+	// Update, so clean up regardless of how Run returned.
+	model.Shutdown()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "bdb: %v\n", err)
 		os.Exit(1)
 	}

@@ -36,6 +36,7 @@ type Model struct {
 
 	cursorRow, cursorCol int
 	scrollRow, scrollCol int
+	rowMode              bool
 
 	sourceSchema string
 	sourceTable  string
@@ -176,9 +177,11 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case "right", "l":
 		m.moveCol(1)
 	case "home":
-		m.cursorCol = 0
+		if !m.rowMode {
+			m.cursorCol = 0
+		}
 	case "end":
-		if len(m.widths) > 0 {
+		if !m.rowMode && len(m.widths) > 0 {
 			m.cursorCol = len(m.widths) - 1
 		}
 	case "g":
@@ -218,7 +221,7 @@ func (m *Model) moveRow(delta int) {
 }
 
 func (m *Model) moveCol(delta int) {
-	if len(m.widths) == 0 {
+	if m.rowMode || len(m.widths) == 0 {
 		return
 	}
 	m.cursorCol = min(max(m.cursorCol+delta, 0), len(m.widths)-1)
@@ -430,6 +433,31 @@ func (m Model) CursorColumnName() string {
 		return ""
 	}
 	return m.rs.Columns[m.cursorCol].Name
+}
+
+// CursorRow returns the raw values of the selected row in display order.
+func (m Model) CursorRow() ([]any, bool) {
+	if m.rs == nil || len(m.cells) == 0 || m.cursorRow < 0 || m.cursorRow >= len(m.cells) {
+		return nil, false
+	}
+	row := m.cursorRow
+	if row < len(m.order) {
+		row = m.order[row]
+	}
+	if row < 0 || row >= len(m.rs.Rows) {
+		return nil, false
+	}
+	return m.rs.Rows[row], true
+}
+
+// SetRowMode disables column selection and highlights whole rows. Used by
+// read-only panels such as the table overview.
+func (m *Model) SetRowMode(enabled bool) {
+	m.rowMode = enabled
+	if enabled {
+		m.cursorCol = 0
+		m.scrollCol = 0
+	}
 }
 
 func (m Model) CursorText() string {
@@ -743,7 +771,7 @@ func (m *Model) renderRow(layout []column, r int, selected bool) string {
 		}
 		style := lipgloss.NewStyle()
 		switch {
-		case selected && col.index == m.cursorCol:
+		case selected && !m.rowMode && col.index == m.cursorCol:
 			style = theme.CellCursor
 		case selected:
 			style = theme.Selected

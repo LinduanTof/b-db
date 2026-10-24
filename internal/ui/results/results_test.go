@@ -354,3 +354,16 @@ func TestOrderedResultFollowsSort(t *testing.T) {
 		t.Fatal("original result should not be reordered")
 	}
 }
+
+func TestRowModeDisablesColumnSelection(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 12)
+	m.SetResult(sample(3))
+	m.SetRowMode(true)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	row, col := m.CursorPosition()
+	if row != 1 || col != 0 {
+		t.Fatalf("cursor = (%d, %d), want (1, 0)", row, col)
+	}
+}

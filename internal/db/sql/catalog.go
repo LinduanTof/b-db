@@ -93,6 +93,8 @@ func (k catalog) Databases(ctx context.Context) ([]string, error) {
 	switch k.c.typ {
 	case "postgres":
 		return k.pgDatabases(ctx)
+	case "mysql":
+		return k.mysqlSchemas(ctx)
 	default:
 		return nil, nil
 	}

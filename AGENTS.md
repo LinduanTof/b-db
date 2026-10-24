@@ -43,11 +43,14 @@ go test ./...     # 需要 testdata/demo.db 已经存在
 - `View()` 返回 `tea.NewView(m.render())`,启用备用屏幕、单元格级鼠标事件和 Kitty 键盘增强协议(用于区分 `Ctrl+Enter` 与 `Enter`)。
 - 异步操作放在返回类型化消息的 `tea.Cmd` 闭包中(`connOpenedMsg`、`queryDoneMsg`、`tablePageDoneMsg`、`mutationDoneMsg` 等),处理器回到根模型执行。查询带 `querySeq` 序号,过期结果会被丢弃。
 - 表数据浏览与编辑器查询是两条独立路径:前者走 `pagination.go` 的 `runPageQuery`/`tablePageDoneMsg`,维护 `pagination` 并设置可编辑来源,不读写编辑器;后者走 `runQuery`/`queryDoneMsg`,只处理编辑器内容。两者共享结果面板,编辑器查询成功后会清除分页状态。
-- 布局是手动计算的:`layout()` 计算 `sideW`、`rightW`、`editorH`、`resultsH`;终端小于 20x6 时直接返回,小于 40x10 时渲染 "terminal too small" 提示。焦点模式有 `manual`(F2 切换缩放)和 `auto`(缩放跟随焦点,F2 暂停)。
-- 会话保存在 `map[string]*session` 中。切换连接时保存当前编辑器/结果/补全器/编辑缓存/标签/分页状态,并恢复目标会话。任何新的按连接保存的 UI 状态都必须加入 `saveCurrentSession` 和 `activateSession`,否则会在连接之间串数据。
+- 侧栏 `↑`/`↓` 只移动光标,`Enter` 才激活节点。表节点激活(`sidebar.TableActivateMsg`)会新建或复用同名标签(`editorTab.source`)并预填 SQL,同时通过分页路径加载数据;`s` 只预览数据,`m` 打开当前节点(连接/数据库/表)的操作菜单(`sidebar.NodeMenuMsg`),`o` 只写入编辑器而不执行。连接根激活显示连接信息,数据库节点激活显示表概览,二者通过 `Model.context`(`contextInfo`/`contextTables`/`contextData`/`contextQuery`)决定结果面板标题、提示和 `r` 的行为。
+- 表概览原始数据保存在 `overviewAll`,客户端过滤词在 `overviewFilter`;`rebuildOverview` 子串匹配前三列后重新注入结果面板。切换会话或断开时必须调用 `resetOverviewState`,否则旧概览会串到新连接;`r` 重新加载后会自动重新应用过滤词。服务端版本异步加载,`versionSeq` 防止旧连接的版本覆盖当前面板。
+- 布局是手动计算的:`layout()` 计算 `sideW`、`rightW`、`editorH`、`resultsH`;终端小于 20x6 时直接返回,小于 40x10 时渲染 "terminal too small" 提示。焦点模式有 `manual`(F2 切换缩放)和 `auto`(缩放跟随焦点,F2 暂停)。`ui.layout` 支持 `stacked`(默认)、`columns`(三栏,右侧宽度不足 60 列时回退 stacked,结果记在 `columnsActive`)和 `results-top`(结果在上);菜单切换会写入状态文件,启动时状态文件优先于配置。
+- 会话保存在 `map[string]*session` 中。切换连接时保存当前编辑器/结果/补全器/编辑缓存/标签/分页/结果面板上下文/概览数据与过滤词/侧栏光标,并恢复目标会话。任何新的按连接保存的 UI 状态都必须加入 `saveCurrentSession` 和 `activateSession`,否则会在连接之间串数据。
+- 侧栏光标用 `sidebar.CursorPath()`/`RestoreCursor(path)` 按节点路径恢复;`pendingCursor` 会保留到树中出现匹配节点,以覆盖表/列节点的异步加载。切换会话时仅当目标会话上次停留在 `contextTables` 才重新加载概览,否则保留上次的表数据或查询结果。关闭或断开后必须调用 `sidebar.CollapseSession` 收起对应节点:断开连接(`disconnectConnection`)会关闭同 base 的全部派生会话并折叠连接根,关闭单个会话只折叠其数据库节点。
 - 侧栏的活动会话标记由 `syncSidebarSessions` 注入(`sessions` 的 key 加当前连接)。新增连接、断开、切换或重置会话后必须调用它,否则侧栏的 `●`/`◉` 状态和活动数量会过期。
-- PostgreSQL 连接成功后会在连接节点下列出所有数据库,并在内存中克隆出 `<连接名>/<数据库名>` 派生会话;每个数据库是独立会话,展开后加载 schema。派生配置只存在于 `cfg.Connections` 中,不写入运行时连接文件。数据库发现由 `db.DatabaseLister` 可选接口完成,其他驱动无需实现。
-- SQL 编辑器支持按连接隔离的多标签(`tabs.go`);标签内容通过 `tab_state.go` 自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`(0600,临时文件 + rename)。新增标签字段时同步修改 `savedTab`/`savedTabs` 与 `collectTabStates`。
+- PostgreSQL、MySQL、MongoDB 连接成功后会在连接节点下列出所有数据库,并在内存中克隆出 `<连接名>/<数据库名>` 派生会话;每个数据库是独立会话。`SupportsDatabases` 决定哪些类型使用数据库列表,`databaseIsSchema` 决定数据库节点下直接加载表(MySQL/MongoDB)还是 schema(PostgreSQL)。数据库列表在连接切换后保留,点击连接根只展开列表,点击数据库节点才切换会话。派生配置只存在于 `cfg.Connections` 中,不写入运行时连接文件。数据库发现由 `db.DatabaseLister` 可选接口完成。
+- SQL 编辑器支持按连接隔离的多标签(`tabs.go`);标签内容通过 `tab_state.go` 自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`(0600,临时文件 + rename)。新增需要持久化的标签字段时同步修改 `savedTab`/`savedTabs` 与 `collectTabStates`;仅内存使用的 `editorTab.source` 故意不持久化,重启后表标签去重不会命中。
 - 编辑器获得焦点时 `q` 不退出;`Ctrl+C` 始终退出。浮层打开时 `q` 退出,其他按键先交给浮层处理。
 
 ### UI 组件(`internal/ui/*`)
@@ -62,6 +65,7 @@ func (m *Model) View() string
 ```
 
 模态组件额外提供 `Open`、`Close`、`IsOpen`。根模型使用 `*Model` 并原地修改;子模型通常返回值拷贝。浮层通过 `textutil.Overlay` 组合,支持 ANSI 样式和 CJK 宽度。
+- `menu` 同时服务选项菜单与节点菜单:粗线边框、标题嵌入顶部边框、分组标题带 `▎` 竖条并转为大写、选中行使用 `CellCursor` 整行色块、选项值右对齐、底部使用紧凑提示行。渲染由 `bodyLines` 统一生成,`itemLines` 记录条目在盒内的行号;`HandleClick` 测量 `View()` 的实际宽高并按 `Overlay` 的居中公式定位,再用「视图行 - 1(顶部边框)」映射条目,`click` 先选中、再次点击已选中项才调用 `activate`,避免误触操作。调整菜单结构时必须同步这个偏移。鼠标滚轮通过 `HandleWheel` 移动选中。
 
 渲染规则:绝不能用 `len`/`utf8.RuneCountInString` 计算终端宽度。使用 `textutil.Width/Truncate/FitLine/FitLines`(底层为 `charmbracelet/x/ansi`),结果表格使用 `go-runewidth`。UI 测试通过 `ansi.StringWidth` 校验精确行数和单元格宽度。
 
@@ -72,6 +76,10 @@ func (m *Model) View() string
 - SQL(PostgreSQL/MySQL/SQLite)共用 `internal/db/sql`;各数据库差异通过 `catalog.go` 中的分支实现。标识符引用/占位符在 `internal/db/dialect`。SQLite 使用纯 Go 的 `modernc.org/sqlite`,因此发布时可以 `CGO_ENABLED=0`;`:memory:` 数据库会强制单连接,避免连接池中每个连接看到独立的内存库。
 - `internal/query/executor.go` 根据顶层语句类型选择 `Query` 或 `Exec`:识别 `WITH` 的 CTE 体、`RETURNING`、括号包裹的查询以及 PostgreSQL dollar-quoting。`query.IsWrite` 用于只读连接的保守写入拦截。Redis/Mongo 设置 `AlwaysQuery`,因为它们所谓的 "SQL" 实际是命令前端。
 - 只有从表视图打开、且表有主键的结果才允许编辑。SQL 写入在事务中执行,影响行数必须恰好为 1;预览 SQL 通过 dialect 生成。`read_only: true` 会在 app 层阻止单元格编辑和 SQL 写入语句,但这是保守的客户端检查,不能替代数据库侧的只读账号。
+- 可选能力通过接口断言实现,不要把它们加进 `Conn`:服务端版本用 `db.Versioner`,表统计用 `db.TableStatProvider`(PG/MySQL 实现,SQLite 返回 nil)。统计包含行数估算、大小、列数与表注释;失败只降级为 `-`,不影响表列表。
+- 大结果集导出必须用 `db.Streamer`/`db.RowStream`(SQL 驱动实现),不要用 `Querier.Query` 把整表载入内存。`RowStream` 是前向游标,调用方负责 `Close`;导出总超时 30 分钟,连接池上限为 4,库级导出逐表打开并在写完后立即关闭游标。XLSX 单 sheet 上限 1,048,575 行,超出返回错误。
+- 表/库节点菜单的导出由 `app/export_data.go` 编排:导出在 `tea.Cmd` 中后台执行,逐表读取 DDL 与流式数据。库级导出优先复用当前会话连接,其次复用 `sessions` 中的连接,否则临时 `db.Open` 并在结束后关闭。CSV 输出目录,SQL/JSON/Excel 单文件。XLSX 由 `internal/export/xlsx.go` 手写 OOXML,不引入第三方依赖。进度通过 `Model.SetSender` 注入的 `program.Send` 从后台推送 `exportProgressMsg`(表计数与每 10 万行行数),状态栏显示当前表与计数;测试中可直接注入回调。`exporting` 标志让状态栏显示进行中图标,`exportedMsg` 负责清除。
+- 表概览的原始行结构固定为 `schema/表名/类型/行数/大小/列数/注释`,`overviewAll` 与过滤都基于这个结构;渲染时 `typeHasSchema` 为 false 的连接(MySQL/MongoDB)去掉首列,避免重复展示数据库名。`contextTables` 下结果面板处于行选择模式(`results.SetRowMode`):左右键不移动列,`Enter`/`v` 通过 `openOverviewTable` 打开当前行表的数据预览。
 - Redis 支持 `SCAN 0 COUNT 50`、`GET "key"` 等命令;Mongo 支持 `find db.collection [json]`、`findOne`、`aggregate`、`count`。二者都不支持写入(`Mutator()` 返回 `nil`)。
 
 ### 配置与持久化状态
@@ -82,11 +90,12 @@ func (m *Model) View() string
 | 运行时添加的连接 | `$XDG_STATE_HOME/bdb/connections.yaml` |
 | 查询历史 | `$XDG_STATE_HOME/bdb/history` |
 | 当前主题 | `$XDG_STATE_HOME/bdb/theme` |
+| 当前布局 | `$XDG_STATE_HOME/bdb/layout` |
 
 - `${ENV_VAR}` 展开适用于大多数连接字符串字段;变量缺失时会报错并指出连接名与字段,不会静默使用空字符串。
 - 运行时连接仅在主配置中不存在同名连接时才合并;新增数据源会保存原始 `${VAR}` 引用,但当前会话使用展开后的副本连接。
 - 状态文件使用 `0600` 权限和临时文件 + rename 的原子写入方式。新增持久化数据时沿用该模式。
-- 校验按连接类型检查必填项(host/user/database/path/addr/uri),拒绝重名,并要求 `default_connection` 存在。
+- 校验按连接类型检查必填项(PostgreSQL/MySQL 的 host、user,SQLite 的 path,Redis 的 addr,Mongo 的 uri/host;PostgreSQL 的 database 可省略,默认连 `postgres` 库),拒绝重名;`default_connection` 字段仅为兼容旧配置保留,启动时不再自动连接。
 - 新增配置字段需要同步修改 `config.Config`/相关结构体、`applyDefaults`、必要的校验、`config.example.yaml`,以及 `config.go` 中的默认配置模板。YAML 使用 `KnownFields(true)`,未知字段会直接报错。
 
 ### i18n 与主题

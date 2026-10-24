@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/LinduanTof/b-db/internal/i18n"
@@ -33,7 +35,7 @@ func TestOpenSelectsFirstAction(t *testing.T) {
 		t.Fatalf("selected = %d, want 1", m.selected)
 	}
 	view := m.View()
-	for _, want := range []string{"Options", "Actions", "Settings", "Theme", "default"} {
+	for _, want := range []string{"Options", "ACTIONS", "SETTINGS", "Theme", "default"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -87,5 +89,97 @@ func TestActionAndEsc(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.IsOpen() {
 		t.Fatal("esc should close the menu")
+	}
+}
+
+func menuPoint(m Model, itemIndex int) (int, int) {
+	_, itemLines := m.bodyLines(m.innerWidth())
+	lines := strings.Split(m.View(), "\n")
+	modalW := 0
+	for _, line := range lines {
+		modalW = max(modalW, ansi.StringWidth(line))
+	}
+	x := max(0, (100-modalW)/2) + 3
+	y := max(0, (30-len(lines))/2) + itemLines[itemIndex] + 1
+	return x, y
+}
+
+func TestMouseClickSelectsThenActivates(t *testing.T) {
+	m := newOpen()
+	x, y := menuPoint(m, 2)
+
+	model, cmd := m.HandleClick(x, y, 100, 30)
+	m = model
+	if cmd != nil {
+		t.Fatal("first click should only select")
+	}
+	if !m.IsOpen() || m.selected != 2 {
+		t.Fatalf("menu open=%v selected=%d", m.IsOpen(), m.selected)
+	}
+
+	model, cmd = m.HandleClick(x, y, 100, 30)
+	m = model
+	if cmd == nil {
+		t.Fatal("second click should activate the action")
+	}
+	if msg := cmd().(ActionMsg); msg.ID != "disconnect" {
+		t.Fatalf("action = %+v", msg)
+	}
+	if m.IsOpen() {
+		t.Fatal("action click should close the menu")
+	}
+}
+
+func TestMouseClickChoiceSelectsThenChanges(t *testing.T) {
+	m := newOpen()
+	x, y := menuPoint(m, 4)
+
+	model, cmd := m.HandleClick(x, y, 100, 30)
+	m = model
+	if cmd != nil || m.selected != 4 {
+		t.Fatalf("first click: cmd=%v selected=%d", cmd, m.selected)
+	}
+
+	model, cmd = m.HandleClick(x, y, 100, 30)
+	m = model
+	if cmd == nil {
+		t.Fatal("second click should change the choice")
+	}
+	if msg := cmd().(ChangedMsg); msg.ID != "theme" || msg.Value != 1 {
+		t.Fatalf("message = %+v", msg)
+	}
+	if !m.IsOpen() {
+		t.Fatal("choice click should keep the menu open")
+	}
+}
+
+func TestMouseClickOutsideCloses(t *testing.T) {
+	m := newOpen()
+	model, _ := m.HandleClick(0, 0, 100, 30)
+	if model.IsOpen() {
+		t.Fatal("click outside should close the menu")
+	}
+}
+
+func TestMouseWheelMovesSelection(t *testing.T) {
+	m := newOpen()
+	m.HandleWheel(1)
+	if m.selected != 2 {
+		t.Fatalf("selected = %d, want 2", m.selected)
+	}
+	m.HandleWheel(-1)
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+}
+
+func TestViewLinesShareWidth(t *testing.T) {
+	m := newOpen()
+	lines := strings.Split(m.View(), "\n")
+	w := ansi.StringWidth(lines[0])
+	for i, line := range lines {
+		if got := ansi.StringWidth(line); got != w {
+			t.Fatalf("line %d width = %d, want %d", i, got, w)
+		}
 	}
 }

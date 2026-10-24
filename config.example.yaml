@@ -1,5 +1,3 @@
-default_connection: local-sqlite
-
 ui:
   # auto | en | zh
   language: auto
@@ -7,6 +5,9 @@ ui:
   theme: default
   # manual | auto: F2 focuses the active pane; auto follows focus
   focus_mode: manual
+  # stacked | columns | results-top: sidebar with stacked panes, three
+  # columns, or the results pane above the editor
+  layout: stacked
 
 query:
   timeout: 30s
@@ -19,6 +20,8 @@ connections:
 
   # PostgreSQL example. ${PG_PASSWORD} must be set before starting bdb;
   # a missing variable is reported as an error instead of silently using "".
+  # PostgreSQL (supported). database is optional and defaults to "postgres";
+  # all databases are still listed in the sidebar after connecting.
   # - name: local-pg
   #   type: postgres
   #   host: 127.0.0.1

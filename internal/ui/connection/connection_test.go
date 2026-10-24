@@ -125,6 +125,24 @@ func TestViewAlignedWidth(t *testing.T) {
 	}
 }
 
+func TestPostgresSubmitWithoutDatabase(t *testing.T) {
+	m := newOpen()
+	m.setValue(fieldName, "local")
+	m.setValue(fieldHost, "127.0.0.1")
+	m.setValue(fieldUser, "postgres")
+	m.setValue(fieldDatabase, "")
+	m.focus = len(m.visibleFields()) - 1
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected submit command")
+	}
+	msg := cmd().(SubmittedMsg)
+	if msg.Conn.Type != config.TypePostgres || msg.Conn.Database != "" {
+		t.Fatalf("connection = %+v", msg.Conn)
+	}
+}
+
 func TestMySQLSubmitWithoutDatabase(t *testing.T) {
 	m := newOpen()
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})

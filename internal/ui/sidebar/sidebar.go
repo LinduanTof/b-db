@@ -69,11 +69,23 @@ type ConnectMsg struct{ Name string }
 
 type DatabaseMsg struct{ Session string }
 
-type SelectTableMsg struct{ Schema, Table, Kind string }
+type TableActivateMsg struct{ Schema, Table, Kind string }
 
-type TableMenuMsg struct{ Schema, Table, Kind string }
+type EditorOpenMsg struct{ Schema, Table, Kind string }
+
+type ConnectionInfoMsg struct{ Name string }
 
 type TableOpenMsg struct{ Schema, Table, Kind string }
+
+type NodeMenuMsg struct {
+	Kind        NodeKind
+	Label       string
+	ConnName    string
+	SessionName string
+	Schema      string
+	Table       string
+	Sub         string
+}
 
 func MsgError(msg any) error {
 	switch m := msg.(type) {
@@ -94,6 +106,7 @@ type Model struct {
 	roots         []*Node
 	flat          []*Node
 	cursor        int
+	pendingCursor string
 	offset        int
 
 	lastClickIndex int
@@ -188,9 +201,7 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 	m.connName = conn.Name()
 	m.currentLabel = ""
 	for _, root := range m.roots {
-		root.Children = nil
-		root.Expanded = false
-		root.Loading = false
+		m.deactivateRoot(root)
 	}
 	for _, root := range m.roots {
 		if root.ConnName == conn.Name() {
@@ -204,6 +215,38 @@ func (m *Model) SetConn(conn db.Conn) tea.Cmd {
 	return nil
 }
 
+func (m *Model) deactivateRoot(root *Node) {
+	if SupportsDatabases(root.Sub) {
+		for _, child := range root.Children {
+			if child.Kind == KindDatabase {
+				child.Expanded = false
+				child.Loading = false
+				child.Children = nil
+			}
+		}
+		root.Loading = false
+		return
+	}
+	root.Children = nil
+	root.Expanded = false
+	root.Loading = false
+}
+
+// SupportsDatabases reports whether the connection type uses one session per
+// database and shows a database list under the connection.
+func SupportsDatabases(typ string) bool {
+	switch typ {
+	case config.TypePostgres, config.TypeMySQL, config.TypeMongo:
+		return true
+	default:
+		return false
+	}
+}
+
+func databaseIsSchema(typ string) bool {
+	return typ == config.TypeMySQL || typ == config.TypeMongo
+}
+
 func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) tea.Cmd {
 	m.epoch++
 	epoch := m.epoch
@@ -213,16 +256,10 @@ func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) te
 
 	var root *Node
 	for _, candidate := range m.roots {
+		m.deactivateRoot(candidate)
 		candidate.Expanded = candidate.ConnName == base
 		if candidate.ConnName == base {
 			root = candidate
-		}
-		for _, child := range candidate.Children {
-			if child.Kind == KindDatabase {
-				child.Expanded = false
-				child.Loading = false
-				child.Children = nil
-			}
 		}
 	}
 	if root == nil {
@@ -243,11 +280,28 @@ func (m *Model) SetDatabaseConn(conn db.Conn, base, database, session string) te
 	dbNode.Label = database
 	dbNode.ConnName = session
 	dbNode.SessionName = session
+	dbNode.Schema = database
 	dbNode.Expanded = true
 	dbNode.Loading = true
 	root.Expanded = true
 	m.rebuild()
+	if databaseIsSchema(conn.Type()) {
+		return loadTables(conn, dbNode, epoch)
+	}
 	return loadSchemas(conn, dbNode, epoch)
+}
+
+func (m *Model) SetDatabaseRoot(conn db.Conn, base string) tea.Cmd {
+	m.epoch++
+	m.conn = conn
+	m.connName = base
+	m.currentLabel = ""
+	for _, root := range m.roots {
+		m.deactivateRoot(root)
+		root.Expanded = root.ConnName == base
+	}
+	m.rebuild()
+	return nil
 }
 
 func (m *Model) SetDatabases(base string, entries []DatabaseEntry) {
@@ -281,6 +335,7 @@ func (m *Model) SetDatabases(base string, entries []DatabaseEntry) {
 		node.Label = entry.Name
 		node.ConnName = entry.Session
 		node.SessionName = entry.Session
+		node.Schema = entry.Name
 		if !m.isSessionActive(entry.Session) {
 			node.Expanded = false
 			node.Loading = false
@@ -330,15 +385,46 @@ func (m *Model) SelectedTable() (schema, table string, ok bool) {
 	return n.Schema, n.Table, true
 }
 
+// CollapseSession collapses the node representing session: the connection
+// root for a base session, or the database node for a derived session.
+func (m *Model) CollapseSession(session string) {
+	if session == "" {
+		return
+	}
+	base, database := session, ""
+	if index := strings.Index(session, "/"); index >= 0 {
+		base, database = session[:index], session[index+1:]
+	}
+	for _, root := range m.roots {
+		if root.ConnName != base {
+			continue
+		}
+		if database == "" {
+			root.Expanded = false
+			for _, child := range root.Children {
+				if child.Kind == KindDatabase {
+					child.Expanded = false
+				}
+			}
+			continue
+		}
+		for _, child := range root.Children {
+			if child.Kind == KindDatabase && child.SessionName == session {
+				child.Expanded = false
+			}
+		}
+	}
+	m.rebuild()
+}
+
 func (m *Model) ClearConn() {
 	m.epoch++
 	m.conn = nil
 	m.connName = ""
 	m.currentLabel = ""
+	m.pendingCursor = ""
 	for _, root := range m.roots {
-		root.Children = nil
-		root.Expanded = false
-		root.Loading = false
+		m.deactivateRoot(root)
 	}
 	m.rebuild()
 }
@@ -436,11 +522,36 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "enter":
 		return m.activate()
+	case "m":
+		n := m.selected()
+		if n != nil {
+			switch n.Kind {
+			case KindConnection, KindDatabase, KindTable:
+				return func() tea.Msg {
+					return NodeMenuMsg{
+						Kind:        n.Kind,
+						Label:       n.Label,
+						ConnName:    n.ConnName,
+						SessionName: n.SessionName,
+						Schema:      n.Schema,
+						Table:       n.Table,
+						Sub:         n.Sub,
+					}
+				}
+			}
+		}
+	case "o":
+		n := m.selected()
+		if n != nil && n.Kind == KindTable {
+			return func() tea.Msg {
+				return EditorOpenMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
+			}
+		}
 	case "s":
 		n := m.selected()
 		if n != nil && n.Kind == KindTable {
 			return func() tea.Msg {
-				return SelectTableMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
+				return TableOpenMsg{Schema: n.Schema, Table: n.Table, Kind: n.Sub}
 			}
 		}
 	case "r":
@@ -456,19 +567,42 @@ func (m *Model) activate() tea.Cmd {
 	if n == nil {
 		return nil
 	}
-	if n.Kind == KindConnection && !m.isCurrentRoot(n.ConnName) {
-		name := n.ConnName
-		return func() tea.Msg { return ConnectMsg{Name: name} }
+	if n.Kind == KindConnection {
+		if SupportsDatabases(n.Sub) && len(n.Children) == 0 && !m.isCurrentRoot(n.ConnName) {
+			name := n.ConnName
+			return func() tea.Msg { return ConnectMsg{Name: name} }
+		}
+		if !SupportsDatabases(n.Sub) && !m.isCurrentRoot(n.ConnName) {
+			name := n.ConnName
+			return func() tea.Msg { return ConnectMsg{Name: name} }
+		}
+		cmd := m.toggle(n)
+		if m.isCurrentRoot(n.ConnName) {
+			return withMsg(cmd, ConnectionInfoMsg{Name: n.ConnName})
+		}
+		return cmd
 	}
-	if n.Kind == KindDatabase && n.SessionName != m.connName {
+	if n.Kind == KindDatabase {
 		session := n.SessionName
-		return func() tea.Msg { return DatabaseMsg{Session: session} }
+		open := func() tea.Msg { return DatabaseMsg{Session: session} }
+		if session == m.connName {
+			return withMsg(m.toggle(n), open())
+		}
+		return open
 	}
 	if n.Kind == KindTable {
 		schema, table, kind := n.Schema, n.Table, n.Sub
-		return func() tea.Msg { return TableMenuMsg{Schema: schema, Table: table, Kind: kind} }
+		return func() tea.Msg { return TableActivateMsg{Schema: schema, Table: table, Kind: kind} }
 	}
 	return m.toggle(n)
+}
+
+func withMsg(cmd tea.Cmd, msg tea.Msg) tea.Cmd {
+	wrapped := func() tea.Msg { return msg }
+	if cmd == nil {
+		return wrapped
+	}
+	return tea.Batch(cmd, wrapped)
 }
 
 func (m *Model) HandleClick(row int) tea.Cmd {
@@ -495,7 +629,7 @@ func (m *Model) HandleClick(row int) tea.Cmd {
 		if double {
 			schema, table, kind := node.Schema, node.Table, node.Sub
 			return func() tea.Msg {
-				return TableOpenMsg{Schema: schema, Table: table, Kind: kind}
+				return TableActivateMsg{Schema: schema, Table: table, Kind: kind}
 			}
 		}
 		return nil
@@ -531,8 +665,8 @@ func (m *Model) move(delta int) {
 }
 
 func (m *Model) toggle(n *Node) tea.Cmd {
-	if n.Kind == KindConnection && n.Sub == config.TypePostgres {
-		if !m.isCurrentRoot(n.ConnName) {
+	if n.Kind == KindConnection && SupportsDatabases(n.Sub) {
+		if len(n.Children) == 0 && !m.isCurrentRoot(n.ConnName) {
 			name := n.ConnName
 			return func() tea.Msg { return ConnectMsg{Name: name} }
 		}
@@ -565,6 +699,9 @@ func (m *Model) toggle(n *Node) tea.Cmd {
 	case KindDatabase:
 		n.Loading = true
 		m.rebuild()
+		if databaseIsSchema(m.conn.Type()) {
+			return loadTables(m.conn, n, m.epoch)
+		}
 		return loadSchemas(m.conn, n, m.epoch)
 	case KindSchema:
 		n.Loading = true
@@ -584,7 +721,7 @@ func (m *Model) reload(n *Node) tea.Cmd {
 		if !m.isCurrentRoot(n.ConnName) {
 			return nil
 		}
-		if n.Sub == config.TypePostgres {
+		if SupportsDatabases(n.Sub) {
 			n.Expanded = true
 			m.rebuild()
 			return nil
@@ -617,6 +754,44 @@ func (m *Model) rebuild() {
 	} else if m.cursor >= len(m.flat) {
 		m.cursor = len(m.flat) - 1
 	}
+	if m.pendingCursor != "" {
+		for i, n := range m.flat {
+			if nodePath(n) == m.pendingCursor {
+				m.cursor = i
+				m.pendingCursor = ""
+				break
+			}
+		}
+	}
+}
+
+func nodePath(n *Node) string {
+	return fmt.Sprintf("%d|%s|%s|%s|%s|%s", n.Kind, n.ConnName, n.SessionName, n.Schema, n.Table, n.Label)
+}
+
+// CursorPath identifies the selected node so it can be restored after the
+// tree is rebuilt for another session.
+func (m *Model) CursorPath() string {
+	n := m.selected()
+	if n == nil {
+		return ""
+	}
+	return nodePath(n)
+}
+
+// RestoreCursor selects path once it appears in the tree. A path that does not
+// match yet is kept, because table and column nodes load asynchronously.
+func (m *Model) RestoreCursor(path string) {
+	m.pendingCursor = path
+}
+
+// ReloadSelected reloads the selected node, if it belongs to the current
+// connection.
+func (m *Model) ReloadSelected() tea.Cmd {
+	if n := m.selected(); n != nil {
+		return m.reload(n)
+	}
+	return nil
 }
 
 func (m *Model) View() string {

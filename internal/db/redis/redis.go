@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -63,6 +64,19 @@ func (c *conn) Catalog() db.Catalog { return catalog{c: c} }
 func (c *conn) Querier() db.Querier { return querier{c: c} }
 
 func (c *conn) Mutator() db.Mutator { return nil }
+
+func (c *conn) Version(ctx context.Context) (string, error) {
+	info, err := c.client.Info(ctx, "server").Result()
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(info, "\n") {
+		if value, ok := strings.CutPrefix(strings.TrimSpace(line), "redis_version:"); ok {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("redis_version not found")
+}
 
 type catalog struct{ c *conn }
 

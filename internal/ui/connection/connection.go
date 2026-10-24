@@ -296,11 +296,7 @@ func (m *Model) build() (config.Connection, error) {
 		conn.Port = port
 		conn.Password = m.input(fieldPassword).Value()
 		if m.connType == config.TypePostgres {
-			database := strings.TrimSpace(m.input(fieldDatabase).Value())
-			if database == "" {
-				return config.Connection{}, m.required(i18n.KeyFormDatabase)
-			}
-			conn.Database = database
+			conn.Database = strings.TrimSpace(m.input(fieldDatabase).Value())
 			conn.SSLMode = strings.TrimSpace(m.input(fieldSSLMode).Value())
 		}
 	case config.TypeRedis:

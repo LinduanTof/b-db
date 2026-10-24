@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -26,6 +27,22 @@ const (
 	FocusModeManual = "manual"
 	FocusModeAuto   = "auto"
 )
+
+const (
+	LayoutStacked    = "stacked"
+	LayoutColumns    = "columns"
+	LayoutResultsTop = "results-top"
+)
+
+// NormalizeLayout maps unknown values to the default stacked layout.
+func NormalizeLayout(name string) string {
+	switch name {
+	case LayoutColumns, LayoutResultsTop:
+		return name
+	default:
+		return LayoutStacked
+	}
+}
 
 const (
 	defaultTimeout = 30 * time.Second
@@ -50,6 +67,8 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type Config struct {
+	// Deprecated: kept so existing config files still load. bdb no longer
+	// connects automatically on startup.
 	DefaultConnection string       `yaml:"default_connection"`
 	UI                UIConfig     `yaml:"ui"`
 	Query             QueryConfig  `yaml:"query"`
@@ -62,6 +81,7 @@ type UIConfig struct {
 	Language  string `yaml:"language"`
 	Theme     string `yaml:"theme"`
 	FocusMode string `yaml:"focus_mode"`
+	Layout    string `yaml:"layout"`
 }
 
 type QueryConfig struct {
@@ -106,12 +126,11 @@ func DefaultPath() string {
 const defaultConfigTemplate = `# bdb configuration
 # Add connections here, or press "a" inside bdb to add one.
 
-default_connection: ""
-
 ui:
   language: auto
   theme: default
   focus_mode: manual
+  layout: stacked   # stacked | columns | results-top
 
 query:
   timeout: 30s
@@ -190,8 +209,10 @@ func Load(path string) (*Config, []string, error) {
 				return nil, nil, fmt.Errorf("parse config %s: %w", path, err)
 			}
 		}
-		if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
-			warnings = append(warnings, fmt.Sprintf("config file %s is readable by other users (mode %04o); consider chmod 600", path, info.Mode().Perm()))
+		if runtime.GOOS != "windows" {
+			if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm()&0o077 != 0 {
+				warnings = append(warnings, fmt.Sprintf("config file %s is readable by other users (mode %04o); consider chmod 600", path, info.Mode().Perm()))
+			}
 		}
 	}
 
@@ -217,6 +238,7 @@ func (c *Config) applyDefaults() {
 	default:
 		c.UI.FocusMode = FocusModeManual
 	}
+	c.UI.Layout = NormalizeLayout(c.UI.Layout)
 	if c.Query.Timeout <= 0 {
 		c.Query.Timeout = Duration(defaultTimeout)
 	}
@@ -301,8 +323,8 @@ func (c Connection) validate() error {
 	}
 	switch c.Type {
 	case TypePostgres:
-		if c.Host == "" || c.User == "" || c.Database == "" {
-			return fmt.Errorf("host, user and database are required for postgres")
+		if c.Host == "" || c.User == "" {
+			return fmt.Errorf("host and user are required for postgres")
 		}
 	case TypeMySQL:
 		if c.Host == "" || c.User == "" {
