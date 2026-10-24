@@ -43,6 +43,7 @@ const (
 	KeyMenuBarHint        = "menu.bar"
 	KeyMenuTitle          = "menu.title"
 	KeyMenuHint           = "menu.hint"
+	KeyMenuHintCompact    = "menu.hint_compact"
 	KeyMenuActions        = "menu.actions"
 	KeyMenuSettings       = "menu.settings"
 	KeyMenuExportCSV      = "menu.export_csv"

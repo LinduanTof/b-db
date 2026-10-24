@@ -548,7 +548,20 @@ func (m *Model) View() tea.View {
 }
 
 func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
-	if msg.Button != tea.MouseLeft || m.anyOverlayOpen() {
+	if msg.Button != tea.MouseLeft {
+		return nil
+	}
+	if m.options.IsOpen() {
+		var cmd tea.Cmd
+		m.options, cmd = m.options.HandleClick(msg.X, msg.Y, m.width, m.height)
+		return cmd
+	}
+	if m.tableMenu.IsOpen() {
+		var cmd tea.Cmd
+		m.tableMenu, cmd = m.tableMenu.HandleClick(msg.X, msg.Y, m.width, m.height)
+		return cmd
+	}
+	if m.anyOverlayOpen() {
 		return nil
 	}
 	x, y := msg.X, msg.Y
@@ -612,6 +625,14 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		return nil
 	}
 
+	if m.options.IsOpen() {
+		m.options.HandleWheel(delta)
+		return nil
+	}
+	if m.tableMenu.IsOpen() {
+		m.tableMenu.HandleWheel(delta)
+		return nil
+	}
 	if m.textView.IsOpen() {
 		m.textView.Scroll(delta)
 		return nil

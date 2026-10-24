@@ -65,6 +65,7 @@ func (m *Model) View() string
 ```
 
 模态组件额外提供 `Open`、`Close`、`IsOpen`。根模型使用 `*Model` 并原地修改;子模型通常返回值拷贝。浮层通过 `textutil.Overlay` 组合,支持 ANSI 样式和 CJK 宽度。
+- `menu` 同时服务选项菜单与节点菜单:粗线边框、标题嵌入顶部边框、分组标题带 `▎` 竖条并转为大写、选中行使用 `CellCursor` 整行色块、选项值右对齐、底部使用紧凑提示行。渲染由 `bodyLines` 统一生成,`itemLines` 记录条目在盒内的行号;`HandleClick` 测量 `View()` 的实际宽高并按 `Overlay` 的居中公式定位,再用「视图行 - 1(顶部边框)」映射条目,`click` 先选中、再次点击已选中项才调用 `activate`,避免误触操作。调整菜单结构时必须同步这个偏移。鼠标滚轮通过 `HandleWheel` 移动选中。
 
 渲染规则:绝不能用 `len`/`utf8.RuneCountInString` 计算终端宽度。使用 `textutil.Width/Truncate/FitLine/FitLines`(底层为 `charmbracelet/x/ansi`),结果表格使用 `go-runewidth`。UI 测试通过 `ansi.StringWidth` 校验精确行数和单元格宽度。
 

@@ -113,7 +113,7 @@ func TestEscOpensOptionsMenu(t *testing.T) {
 		t.Fatal("esc should open the options menu")
 	}
 	content := m.View().Content
-	for _, want := range []string{"Options", "Actions", "Settings", "Theme", "Language"} {
+	for _, want := range []string{"Options", "ACTIONS", "SETTINGS", "Theme", "Language"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("menu missing %q:\n%s", want, content)
 		}
@@ -2228,5 +2228,18 @@ func TestDisconnectConnectionClosesDerivedSessions(t *testing.T) {
 	}
 	if m.connName != "" {
 		t.Fatalf("current session = %q, want empty", m.connName)
+	}
+}
+
+func TestMenuMouseClickOutsideCloses(t *testing.T) {
+	m := testModel(t, "en")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if !m.options.IsOpen() {
+		t.Fatal("options menu should open")
+	}
+	model, _ := m.Update(tea.MouseClickMsg{X: 0, Y: 0, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.options.IsOpen() {
+		t.Fatal("click outside should close the menu")
 	}
 }
