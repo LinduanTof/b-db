@@ -385,6 +385,38 @@ func (m *Model) SelectedTable() (schema, table string, ok bool) {
 	return n.Schema, n.Table, true
 }
 
+// CollapseSession collapses the node representing session: the connection
+// root for a base session, or the database node for a derived session.
+func (m *Model) CollapseSession(session string) {
+	if session == "" {
+		return
+	}
+	base, database := session, ""
+	if index := strings.Index(session, "/"); index >= 0 {
+		base, database = session[:index], session[index+1:]
+	}
+	for _, root := range m.roots {
+		if root.ConnName != base {
+			continue
+		}
+		if database == "" {
+			root.Expanded = false
+			for _, child := range root.Children {
+				if child.Kind == KindDatabase {
+					child.Expanded = false
+				}
+			}
+			continue
+		}
+		for _, child := range root.Children {
+			if child.Kind == KindDatabase && child.SessionName == session {
+				child.Expanded = false
+			}
+		}
+	}
+	m.rebuild()
+}
+
 func (m *Model) ClearConn() {
 	m.epoch++
 	m.conn = nil

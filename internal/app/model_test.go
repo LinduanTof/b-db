@@ -2196,3 +2196,37 @@ func TestExportDatabaseProgress(t *testing.T) {
 		t.Fatalf("last progress = %#v", messages[len(messages)-1])
 	}
 }
+
+func TestDisconnectConnectionClosesDerivedSessions(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	other, err := db.Open(context.Background(), db.Config{
+		Name:   "local-sqlite/other",
+		Type:   "sqlite",
+		Params: map[string]string{"path": ":memory:"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["local-sqlite/other"] = &session{conn: other}
+
+	m.disconnectConnection("local-sqlite")
+	if _, ok := m.sessions["local-sqlite/other"]; ok {
+		t.Fatal("derived session was not removed")
+	}
+	if err := other.Ping(context.Background()); err == nil {
+		t.Fatal("derived connection is still open")
+	}
+	if m.connName != "" {
+		t.Fatalf("current session = %q, want empty", m.connName)
+	}
+}

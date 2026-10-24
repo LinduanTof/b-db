@@ -279,3 +279,30 @@ func TestCursorPathWaitsForAsyncChildren(t *testing.T) {
 		t.Fatalf("pending path = %q, want cleared", m.pendingCursor)
 	}
 }
+
+func TestCollapseSession(t *testing.T) {
+	m := New([]config.Connection{
+		{Name: "pg", Type: config.TypePostgres, Host: "h", User: "u", Database: "postgres"},
+	}, i18n.New("en"))
+	m.SetSize(30, 10)
+	root := m.roots[0]
+	root.Expanded = true
+	database := &Node{Kind: KindDatabase, Label: "app", ConnName: "pg", SessionName: "pg/app", Expanded: true}
+	root.Children = []*Node{database}
+	m.rebuild()
+
+	m.CollapseSession("pg/app")
+	if database.Expanded {
+		t.Fatal("database node should collapse")
+	}
+	if !root.Expanded {
+		t.Fatal("closing a database session should keep the connection expanded")
+	}
+
+	root.Expanded = true
+	database.Expanded = true
+	m.CollapseSession("pg")
+	if root.Expanded || database.Expanded {
+		t.Fatalf("connection collapse: root=%v database=%v", root.Expanded, database.Expanded)
+	}
+}

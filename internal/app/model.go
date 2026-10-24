@@ -1844,7 +1844,7 @@ func (m *Model) runNodeMenuAction(msg menu.ActionMsg) tea.Cmd {
 	case "conn.refresh", "db.refresh":
 		return m.sidebar.ReloadSelected()
 	case "conn.disconnect":
-		m.disconnect()
+		m.disconnectConnection(n.ConnName)
 		return nil
 	case "db.open":
 		if n.SessionName == m.connName {
@@ -1856,6 +1856,20 @@ func (m *Model) runNodeMenuAction(msg menu.ActionMsg) tea.Cmd {
 		return nil
 	}
 	return nil
+}
+
+func (m *Model) disconnectConnection(base string) {
+	if sessionBase(m.connName) == base {
+		m.disconnect()
+	}
+	for name, saved := range m.sessions {
+		if sessionBase(name) == base {
+			_ = saved.conn.Close()
+			delete(m.sessions, name)
+		}
+	}
+	m.sidebar.CollapseSession(base)
+	m.syncSidebarSessions()
 }
 
 func (m *Model) closeSession(name string) {
@@ -1870,6 +1884,7 @@ func (m *Model) closeSession(name string) {
 		_ = saved.conn.Close()
 		delete(m.sessions, name)
 	}
+	m.sidebar.CollapseSession(name)
 	m.syncSidebarSessions()
 	m.setStatus(m.t.T(i18n.KeyStatusSessionClosed, name), false)
 }
@@ -2074,6 +2089,7 @@ func (m *Model) syncSidebarSessions() {
 
 func (m *Model) disconnect() {
 	m.connectSeq++
+	session := m.connName
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -2096,6 +2112,9 @@ func (m *Model) disconnect() {
 	m.setContext(contextQuery)
 	m.resetOverviewState()
 	m.sidebar.ClearConn()
+	if session != "" {
+		m.sidebar.CollapseSession(session)
+	}
 	m.results.Clear()
 	_ = m.saveTabStatesNow()
 	m.syncSidebarSessions()
