@@ -82,6 +82,7 @@ type UIConfig struct {
 	Theme     string `yaml:"theme"`
 	FocusMode string `yaml:"focus_mode"`
 	Layout    string `yaml:"layout"`
+	ExportDir string `yaml:"export_dir"`
 }
 
 type QueryConfig struct {
@@ -131,6 +132,7 @@ ui:
   theme: default
   focus_mode: manual
   layout: stacked   # stacked | columns | results-top
+  export_dir: ""    # defaults to the current working directory
 
 query:
   timeout: 30s

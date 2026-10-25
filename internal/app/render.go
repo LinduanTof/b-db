@@ -108,6 +108,9 @@ func (m *Model) render() string {
 	if m.tableMenu.IsOpen() {
 		return textutil.Overlay(base, m.tableMenu.View(), m.width, m.height)
 	}
+	if m.dirInput.IsOpen() {
+		return textutil.Overlay(base, m.dirInput.View(), m.width, m.height)
+	}
 	if m.textView.IsOpen() {
 		return m.textView.View()
 	}

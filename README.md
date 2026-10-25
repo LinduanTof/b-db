@@ -51,6 +51,7 @@ ui:
   theme: default          # default | dracula | gruvbox | nord | catppuccin | solarized-light
   focus_mode: manual      # manual | auto
   layout: stacked         # stacked | columns | results-top
+  export_dir: ""          # 导出目录；留空为当前工作目录
 query:
   timeout: 30s
   max_rows: 1000          # 表数据浏览每页行数；编辑器查询不限制
@@ -220,7 +221,7 @@ connections:
 - CSV：表级单个文件；数据库级输出到目录，每表一个文件
 - JSON：表级为对象数组；数据库级为 `{ "schema.table": [...] }`
 
-文件写入当前工作目录，命名为 `bdb-<名称>-<时间戳>.<扩展名>`。导出使用流式游标逐行读取并写入磁盘，内存占用与表大小无关（不会把整表载入内存）；状态栏实时显示当前表与进度（库级显示表计数，单表每 10 万行更新一次行数），完成后显示路径。导出总超时为 30 分钟。Excel 单个工作表最多 1,048,575 行，超出会报错，请改用 CSV 或 SQL。导出仅适用于 PostgreSQL、MySQL 和 SQLite；Redis 与 MongoDB 的节点菜单不显示导出项。
+文件写入导出目录，默认是启动时的工作目录。可在 `Esc` 选项菜单的「Export directory」中修改：输入绝对路径或相对路径（相对当前工作目录），留空恢复为当前工作目录；目录不存在时会自动创建。选择保存在 `$XDG_STATE_HOME/bdb/export_dir`，也可用配置 `ui.export_dir` 设置默认值。命名为 `bdb-<名称>-<时间戳>.<扩展名>`。导出使用流式游标逐行读取并写入磁盘，内存占用与表大小无关（不会把整表载入内存）；状态栏实时显示当前表与进度（库级显示表计数，单表每 10 万行更新一次行数），完成后显示路径。导出总超时为 30 分钟。Excel 单个工作表最多 1,048,575 行，超出会报错，请改用 CSV 或 SQL。导出仅适用于 PostgreSQL、MySQL 和 SQLite；Redis 与 MongoDB 的节点菜单不显示导出项。
 
 ## 数据编辑
 

@@ -375,7 +375,41 @@ func exportPath(outDir, prefix, ext string, dir bool) string {
 	return filepath.Join(outDir, name)
 }
 
+func (m *Model) applyExportDir(value string) {
+	dir := value
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			m.setStatus(m.t.T(i18n.KeyErrorExportDir, err), true)
+			return
+		}
+		dir = wd
+	} else if !filepath.IsAbs(dir) {
+		wd, err := os.Getwd()
+		if err != nil {
+			m.setStatus(m.t.T(i18n.KeyErrorExportDir, err), true)
+			return
+		}
+		dir = filepath.Join(wd, dir)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		m.dirInput.Open(value)
+		m.dirInput.SetError(m.t.T(i18n.KeyErrorExportDir, err))
+		return
+	}
+	m.outDir = dir
+	saved := dir
+	if value == "" {
+		saved = ""
+	}
+	_ = config.SaveExportDirState(saved)
+	m.setStatus(m.t.T(i18n.KeyStatusExportDir, dir), false)
+}
+
 func writeExportFile(path string, write func(*os.File) error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return err

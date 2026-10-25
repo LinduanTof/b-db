@@ -992,7 +992,7 @@ func TestAutoFocusLayout(t *testing.T) {
 func TestMenuFocusLayout(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 11; i++ {
+	for i := 0; i < 12; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -2241,5 +2241,40 @@ func TestMenuMouseClickOutsideCloses(t *testing.T) {
 	m = model.(*Model)
 	if m.options.IsOpen() {
 		t.Fatal("click outside should close the menu")
+	}
+}
+
+func TestExportDirSetting(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	target := filepath.Join(t.TempDir(), "exports")
+	m.applyExportDir(target)
+	if m.outDir != target {
+		t.Fatalf("outDir = %q", m.outDir)
+	}
+	if saved, ok := config.LoadExportDirState(); !ok || saved != target {
+		t.Fatalf("state = %q ok=%v", saved, ok)
+	}
+
+	m = runCmd(t, m, m.exportTableCmd("main", "users", "sql"))
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("exported files = %d, want 1", len(entries))
+	}
+}
+
+func TestExportDirMenuOpens(t *testing.T) {
+	m := testModel(t, "en")
+	m.runMenuAction(menu.ActionMsg{ID: "exportdir"})
+	if !m.dirInput.IsOpen() {
+		t.Fatal("export directory input should open")
 	}
 }
