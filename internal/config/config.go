@@ -58,6 +58,10 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	if err := node.Decode(&s); err != nil {
 		return err
 	}
+	if strings.EqualFold(strings.TrimSpace(s), "unlimited") {
+		*d = Duration(-1)
+		return nil
+	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
 		return fmt.Errorf("invalid duration %q: %w", s, err)
@@ -241,7 +245,7 @@ func (c *Config) applyDefaults() {
 		c.UI.FocusMode = FocusModeManual
 	}
 	c.UI.Layout = NormalizeLayout(c.UI.Layout)
-	if c.Query.Timeout <= 0 {
+	if c.Query.Timeout == 0 {
 		c.Query.Timeout = Duration(defaultTimeout)
 	}
 	if c.Query.MaxRows <= 0 {

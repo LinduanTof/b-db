@@ -2278,3 +2278,26 @@ func TestExportDirMenuOpens(t *testing.T) {
 		t.Fatal("export directory input should open")
 	}
 }
+
+func TestUnlimitedTimeout(t *testing.T) {
+	m := testModel(t, "en")
+	m.applyMenuChange(menu.ChangedMsg{ID: "timeout", Value: 5})
+	if got := m.cfg.Query.Timeout.Std(); got != 0 {
+		t.Fatalf("timeout = %s, want unlimited", got)
+	}
+	if !strings.Contains(m.status, m.t.T(i18n.KeyMenuUnlimited)) {
+		t.Fatalf("status = %q", m.status)
+	}
+	ctx, cancel := m.queryContext()
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("unlimited query context should have no deadline")
+	}
+
+	m.cfg.Query.Timeout = config.Duration(5 * time.Second)
+	timed, end := m.queryContext()
+	defer end()
+	if _, ok := timed.Deadline(); !ok {
+		t.Fatal("timed query context should have a deadline")
+	}
+}

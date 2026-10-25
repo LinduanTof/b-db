@@ -57,7 +57,7 @@ func (m *Model) runPageQuery(pager *pagination) tea.Cmd {
 	m.querySeq++
 	id := m.querySeq
 	m.running = true
-	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.Query.Timeout.Std())
+	ctx, cancel := m.queryContext()
 	m.cancel = cancel
 	m.setStatus(m.t.T(i18n.KeyStatusRunning), false)
 

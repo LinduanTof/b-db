@@ -41,7 +41,7 @@ go test ./...     # 需要 testdata/demo.db 已经存在
 - `Update` 将 `tea.WindowSizeMsg` 分发给所有浮层并调用 `layout()`,按键交给 `handleKey`,鼠标事件单独处理,自定义消息交给对应处理器。未识别的消息最终落到 `editor.Update`。
 - 浮层优先级在三个地方重复维护:`handleKey`、`render()`、`anyOverlayOpen()`。顺序为:选项菜单、表操作菜单、导出目录输入、文本查看器、结构详情、连接表单、单元格编辑、确认框、帮助。新增模态框时必须同时接入这三处,以及 `layout()`/`SetSize` 和 `closeOverlays()`。
 - `View()` 返回 `tea.NewView(m.render())`,启用备用屏幕、单元格级鼠标事件和 Kitty 键盘增强协议(用于区分 `Ctrl+Enter` 与 `Enter`)。
-- 异步操作放在返回类型化消息的 `tea.Cmd` 闭包中(`connOpenedMsg`、`queryDoneMsg`、`tablePageDoneMsg`、`mutationDoneMsg` 等),处理器回到根模型执行。查询带 `querySeq` 序号,过期结果会被丢弃。
+- 异步操作放在返回类型化消息的 `tea.Cmd` 闭包中(`connOpenedMsg`、`queryDoneMsg`、`tablePageDoneMsg`、`mutationDoneMsg` 等),处理器回到根模型执行。查询带 `querySeq` 序号,过期结果会被丢弃。查询超时统一走 `Model.queryContext()`:`query.timeout` 为非正值(配置写 `unlimited`)时返回无 deadline 的 context,其余使用 `WithTimeout`;编辑器查询、分页、概览与版本查询共用该入口。
 - 表数据浏览与编辑器查询是两条独立路径:前者走 `pagination.go` 的 `runPageQuery`/`tablePageDoneMsg`,维护 `pagination` 并设置可编辑来源,不读写编辑器;后者走 `runQuery`/`queryDoneMsg`,只处理编辑器内容。两者共享结果面板,编辑器查询成功后会清除分页状态。
 - 侧栏 `↑`/`↓` 只移动光标,`Enter` 才激活节点。表节点激活(`sidebar.TableActivateMsg`)会新建或复用同名标签(`editorTab.source`)并预填 SQL,同时通过分页路径加载数据;`s` 只预览数据,`m` 打开当前节点(连接/数据库/表)的操作菜单(`sidebar.NodeMenuMsg`),`o` 只写入编辑器而不执行。连接根激活显示连接信息,数据库节点激活显示表概览,二者通过 `Model.context`(`contextInfo`/`contextTables`/`contextData`/`contextQuery`)决定结果面板标题、提示和 `r` 的行为。
 - 表概览原始数据保存在 `overviewAll`,客户端过滤词在 `overviewFilter`;`rebuildOverview` 子串匹配前三列后重新注入结果面板。切换会话或断开时必须调用 `resetOverviewState`,否则旧概览会串到新连接;`r` 重新加载后会自动重新应用过滤词。服务端版本异步加载,`versionSeq` 防止旧连接的版本覆盖当前面板。

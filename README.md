@@ -53,7 +53,7 @@ ui:
   layout: stacked         # stacked | columns | results-top
   export_dir: ""          # 导出目录；留空为当前工作目录
 query:
-  timeout: 30s
+  timeout: 30s            # unlimited 表示禁用客户端超时
   max_rows: 1000          # 表数据浏览每页行数；编辑器查询不限制
 connections:
   - name: local
@@ -76,7 +76,7 @@ connections:
     database: bdb
 ```
 
-`password` 等字段支持 `${ENV_VAR}` 引用；变量未设置时启动会报错并指出连接名与字段，不会静默使用空字符串。建议 `chmod 600` 配置文件。PostgreSQL 的 `database` 可省略，省略时连接到 `postgres` 库，连上后仍可在侧栏浏览所有数据库。
+`password` 等字段支持 `${ENV_VAR}` 引用；变量未设置时启动会报错并指出连接名与字段，不会静默使用空字符串。建议 `chmod 600` 配置文件。PostgreSQL 的 `database` 可省略，省略时连接到 `postgres` 库，连上后仍可在侧栏浏览所有数据库。`query.timeout` 设为 `unlimited`（或在 `Esc` 选项菜单选择「Unlimited」）会禁用客户端查询超时，查询只能手动取消；连接建立超时仍为 10 秒。
 
 ## 快捷键
 

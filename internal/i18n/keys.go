@@ -66,6 +66,7 @@ const (
 	KeyMenuExportDDL      = "menu.export_ddl"
 	KeyMenuExportXLSX     = "menu.export_xlsx"
 	KeyMenuExportDir      = "menu.export_dir"
+	KeyMenuUnlimited      = "menu.unlimited"
 	KeyExportDirTitle     = "exportdir.title"
 	KeyExportDirNote      = "exportdir.note"
 	KeyExportDirHint      = "exportdir.hint"
