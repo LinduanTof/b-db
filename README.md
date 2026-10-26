@@ -1,8 +1,16 @@
 # bdb
 
+[English](README.en.md) | **简体中文**
+
 一款面向 Linux 终端的现代化数据库管理工具，使用 Go + [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) 构建。目标是在一个终端窗口内完成连接管理、库表浏览、SQL 编辑执行、数据编辑与导出。
 
 已完成：PostgreSQL/MySQL/SQLite 浏览与查询、事务化数据编辑、Redis/MongoDB、多会话、表结构/DDL/索引、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、6 套主题、SQL 语法高亮与自动补全、专注布局与鼠标操作。
+
+## 界面预览
+
+![bdb 主界面](docs/images/01-main.png)
+
+连接后在侧栏浏览库表，在编辑器中写 SQL 并执行，结果以可编辑的网格展示。下文各章节还会给出对应的真实运行截图。
 
 ## 安装
 
@@ -137,6 +145,10 @@ connections:
 
 菜单打开时按 `q` 可直接退出。
 
+![选项菜单](docs/images/07-options.png)
+
+*选项菜单分为「操作」与「设置」两个标签页，主题、语言、超时、分页、布局和导出目录修改后立即生效。*
+
 ## SQL 文件执行
 
 启动时传入脚本会在连接默认连接后自动执行，最后一条查询的结果显示在结果面板：
@@ -156,6 +168,10 @@ connections:
 - 运行时添加的连接保存在 `$XDG_STATE_HOME/bdb/connections.yaml`（权限 `0600`），启动时与主配置合并；同名连接不会重复添加。
 - 字段会根据类型动态变化：SQLite 只需要名称与路径；MySQL 与 Navicat 一样不需要填写数据库名；Redis 填写地址、密码与数据库编号；MongoDB 填写连接 URI。
 - 表单内容居中展示，label 固定宽度左对齐；当前字段以 `▸` 标记并在底部显示操作提示。
+
+![添加数据源](docs/images/08-add-source.png)
+
+*表单字段随类型变化，密码以掩码显示，保存后立即连接并出现在侧栏。*
 
 ## 布局
 
@@ -236,6 +252,10 @@ connections:
 - 连接配置 `read_only: true` 时禁止单元格编辑和 SQL 写入语句，并额外拦截：SQL 的 `EXECUTE`、SQLite 的写入型 `PRAGMA`；Redis 中只放行常见只读命令，其余（含 `EVAL`/`FCALL`、`SETBIT`、`SORT ... STORE` 等）一律拒绝；MongoDB 的 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 一律拒绝。这是保守的客户端检查，仍建议使用数据库只读账号或只读副本作为真正的安全边界。
 - 表操作菜单的「Insert row template」会生成 `INSERT` 模板到编辑器
 
+![单元格编辑](docs/images/05-cell-edit.png)
+
+*按 `e` 修改单元格，回车后先预览完整 `UPDATE` 语句，确认时才在事务中执行。*
+
 ## Redis 与 MongoDB
 
 Redis：
@@ -279,11 +299,23 @@ SQL 标签也按连接隔离：每个会话保存自己的标签列表和活动�
 
 DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc` 或 `q` 关闭。
 
+![表操作菜单](docs/images/04-table-menu.png)
+
+*表操作菜单提供数据预览、DDL、结构、索引、生成 SELECT、插入行模板以及 SQL/Excel/CSV/JSON 导出。*
+
+![表结构查看器](docs/images/06-structure.png)
+
+*`View structure` 列出列类型、主键、非空、默认值、索引与外键，可用 `g`/`G` 快速跳到顶部或底部。*
+
 ## SQL 编辑器
 
 编辑器会按当前主题为 SQL 着色：关键字、函数、字符串、数字与注释分别使用不同颜色。支持多行编辑、行号、`Ctrl+Space` 自动补全与查询历史。
 
 编辑器查询不限制返回行数，结果会一次性载入内存；查询大表时请自行加 `LIMIT`。`query.max_rows` 只控制表数据浏览的分页大小。
+
+![SQL 编辑器与查询结果](docs/images/02-query.png)
+
+*关键字、字符串、数字与注释分别着色；`F5` 或 `Ctrl+Enter` 执行，结果网格支持排序、复制与导出。*
 
 ## 底部状态栏
 
@@ -305,9 +337,17 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 在编辑器中输入标识符时会自动弹出候选，也可按 `Ctrl+Space` 手动触发。候选包括 SQL 关键字、常用函数、当前连接的所有表名，以及已加载的列名；输入 `users.` 时会按需加载该表的列。`↑`/`↓` 选择，`Tab` 或 `Enter` 接受，`Esc` 关闭。
 
+![SQL 自动补全](docs/images/03-autocomplete.png)
+
+*在专注布局（`F2`）下输入标识符并触发 `Ctrl+Space`，候选会标注来源（表名、关键字）。*
+
 ## 主题
 
 内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或按 `Esc` 打开选项菜单后用 `←`/`→` 切换。运行时选择会写入 `$XDG_STATE_HOME/bdb/theme`，下次启动自动恢复；该状态文件优先于 `ui.theme`，若想改回配置文件中的主题，请先删除此状态文件。
+
+![dracula 主题与三栏布局](docs/images/09-theme-columns.png)
+
+*`dracula` 主题下的 `columns` 三栏布局：侧栏、编辑器与结果并排，终端过窄时自动回退为 `stacked`。*
 
 ## 查询历史
 
