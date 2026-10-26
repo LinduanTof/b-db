@@ -65,3 +65,44 @@ func TestReset(t *testing.T) {
 		}
 	}
 }
+
+func TestSuggestInContext(t *testing.T) {
+	e := New()
+	e.SetTables([]string{"users", "orders"})
+	e.SetColumns("users", []string{"id", "name", "email"})
+	e.SetColumns("orders", []string{"id", "total"})
+
+	got := e.SuggestIn("us", Context{Kind: ContextTable})
+	if len(got) != 1 || got[0].Text != "users" || got[0].Kind != KindTable {
+		t.Fatalf("table context = %+v", got)
+	}
+
+	ctx := Context{Kind: ContextColumn, Tables: []TableRef{{Table: "users"}}}
+	got = e.SuggestIn("", ctx)
+	if !hasCandidate(got, "name", KindColumn) {
+		t.Fatalf("column context missing name: %+v", got)
+	}
+	if hasCandidate(got, "total", KindColumn) {
+		t.Fatalf("column context leaked orders columns: %+v", got)
+	}
+	for _, candidate := range got {
+		if candidate.Kind == KindTable {
+			t.Fatalf("column context should not offer tables: %+v", candidate)
+		}
+	}
+
+	ctx = Context{Kind: ContextColumn, Tables: []TableRef{{Table: "users", Alias: "u"}}}
+	got = e.SuggestIn("u.na", ctx)
+	if len(got) != 1 || got[0].Text != "name" || got[0].Kind != KindColumn {
+		t.Fatalf("alias qualifier = %+v", got)
+	}
+}
+
+func hasCandidate(candidates []Candidate, text string, kind Kind) bool {
+	for _, candidate := range candidates {
+		if candidate.Text == text && candidate.Kind == kind {
+			return true
+		}
+	}
+	return false
+}

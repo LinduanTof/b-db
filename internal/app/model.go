@@ -169,6 +169,17 @@ type completionTablesMsg struct {
 	err    error
 }
 
+type completionColumnSet struct {
+	table   string
+	alias   string
+	columns []string
+}
+
+type completionContextMsg struct {
+	id   uint64
+	sets []completionColumnSet
+}
+
 type completionColumnsMsg struct {
 	id      uint64
 	table   string
@@ -229,6 +240,9 @@ type Model struct {
 	completer    *ac.Engine
 	tableSchemas map[string]string
 
+	completionLoading bool
+	completionLoadKey string
+
 	history       *history.Store
 	pendingScript string
 	themeName     string
@@ -288,14 +302,17 @@ type session struct {
 	results      results.Model
 	completer    *ac.Engine
 	tableSchemas map[string]string
-	editCache    map[string]editInfo
-	pager        *pagination
-	tabs         []editorTab
-	activeTab    int
-	context      contextKind
-	overviewAll  [][]any
-	filter       string
-	cursor       string
+
+	completionLoading bool
+	completionLoadKey string
+	editCache         map[string]editInfo
+	pager             *pagination
+	tabs              []editorTab
+	activeTab         int
+	context           contextKind
+	overviewAll       [][]any
+	filter            string
+	cursor            string
 }
 
 func New(cfg *config.Config, t *i18n.Translator) *Model {
@@ -456,11 +473,30 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.id != m.connectSeq {
 			return m, nil
 		}
-		if msg.err == nil {
-			m.completer.SetColumns(msg.table, msg.columns)
-			m.setStatus(m.t.T(i18n.KeyStatusReady), false)
+		m.completionLoading = false
+		m.completionLoadKey = ""
+		if msg.err != nil {
+			m.completer.SetColumns(msg.table, nil)
+			m.setStatus(m.t.T(i18n.KeyErrorCatalog, msg.err), true)
+			return m, nil
 		}
-		return m, nil
+		m.completer.SetColumns(msg.table, msg.columns)
+		m.setStatus(m.t.T(i18n.KeyStatusReady), false)
+		return m, m.refreshCompletion(true)
+	case completionContextMsg:
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
+		m.completionLoading = false
+		m.completionLoadKey = ""
+		for _, set := range msg.sets {
+			m.completer.SetColumns(set.table, set.columns)
+			if set.alias != "" {
+				m.completer.SetColumns(set.alias, set.columns)
+			}
+		}
+		m.setStatus(m.t.T(i18n.KeyStatusReady), false)
+		return m, m.refreshCompletion(true)
 	case uicomplete.AcceptedMsg:
 		if m.focus == focusEditor {
 			m.editor.ReplaceBeforeCursor(msg.PrefixLen, msg.Text)
@@ -915,7 +951,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.cancelMutation()
 			return nil
 		}
-		m.completion.Close()
+		if m.completion.IsOpen() {
+			m.completion.Close()
+			return nil
+		}
 		m.options.OpenTabs("", []string{
 			m.t.T(i18n.KeyMenuTabActions),
 			m.t.T(i18n.KeyMenuTabSettings),
@@ -1185,6 +1224,8 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 	m.setStatus(m.t.T(i18n.KeyStatusReady), false)
 	m.completer.Reset()
 	m.tableSchemas = map[string]string{}
+	m.completionLoading = false
+	m.completionLoadKey = ""
 	m.completion.Close()
 
 	cmds := []tea.Cmd{m.sidebarConnCmd(m.conn, msg.name), m.loadCompletionTablesCmd(), m.scheduleTabSave()}
@@ -2519,6 +2560,8 @@ func (m *Model) activateSession(name string, saved *session) {
 	}
 	m.pendingCmd = nil
 	m.running = false
+	m.completionLoading = false
+	m.completionLoadKey = ""
 	m.querySeq++
 	m.resetOverviewState()
 	m.overviewAll = saved.overviewAll
@@ -2533,6 +2576,8 @@ func (m *Model) activateSession(name string, saved *session) {
 }
 
 func (m *Model) resetSession() {
+	m.completionLoading = false
+	m.completionLoadKey = ""
 	m.conn = nil
 	m.connName = ""
 	m.running = false
@@ -2805,27 +2850,133 @@ func (m *Model) refreshCompletion(force bool) tea.Cmd {
 		return nil
 	}
 	word, _ := m.editor.WordBeforeCursor()
-	if word == "" {
-		m.completion.Close()
-		return nil
-	}
+	ctx := ac.Analyze(m.editor.Value(), m.editor.CursorOffset())
 	qualifier, prefix := ac.SplitWord(word)
-	if !force && len([]rune(prefix)) < 2 {
-		m.completion.Close()
-		return nil
+
+	if word == "" {
+		if !force && !ctx.Trigger {
+			m.completion.Close()
+			return nil
+		}
+	} else if !force && qualifier == "" {
+		minPrefix := 2
+		if ctx.Kind != ac.ContextAny {
+			minPrefix = 1
+		}
+		if len([]rune(prefix)) < minPrefix {
+			m.completion.Close()
+			return nil
+		}
 	}
-	if qualifier != "" && !m.completer.HasColumns(qualifier) {
-		m.completion.Close()
-		m.setStatus(m.t.T(i18n.KeyStatusCompletionLoading), false)
-		return m.loadColumnsCmd(qualifier)
+
+	switch {
+	case qualifier != "":
+		if table, ok := ac.ResolveTable(ctx, qualifier); ok {
+			if !m.completer.HasColumns(table) {
+				return m.loadCompletionColumns(completionContextKey(ctx), ctx, qualifier)
+			}
+		} else if !m.completer.HasColumns(qualifier) {
+			return m.loadCompletionColumns("q:"+strings.ToLower(qualifier), ac.Context{}, qualifier)
+		}
+	case ctx.Kind == ac.ContextColumn:
+		missing := false
+		for _, ref := range ctx.Tables {
+			if !m.completer.HasColumns(ref.Table) {
+				missing = true
+				break
+			}
+		}
+		if missing {
+			return m.loadCompletionColumns(completionContextKey(ctx), ctx, "")
+		}
 	}
-	candidates := m.completer.Suggest(word)
+
+	candidates := m.completer.SuggestIn(word, ctx)
 	if len(candidates) == 0 {
 		m.completion.Close()
 		return nil
 	}
+	m.completionLoading = false
+	m.completionLoadKey = ""
 	m.completion.Open(prefix, candidates)
 	return nil
+}
+
+func completionContextKey(ctx ac.Context) string {
+	if len(ctx.Tables) == 0 {
+		return "ctx"
+	}
+	parts := make([]string, 0, len(ctx.Tables))
+	for _, ref := range ctx.Tables {
+		parts = append(parts, strings.ToLower(ref.Schema+"."+ref.Table+"."+ref.Alias))
+	}
+	return "ctx:" + strings.Join(parts, ",")
+}
+
+// loadCompletionColumns starts one background load per context. The key guards
+// against spawning a new query on every keystroke while the first one runs.
+func (m *Model) loadCompletionColumns(key string, ctx ac.Context, qualifier string) tea.Cmd {
+	if m.completionLoading && m.completionLoadKey == key {
+		m.completion.Close()
+		return nil
+	}
+	m.completionLoading = true
+	m.completionLoadKey = key
+	m.completion.Close()
+	m.setStatus(m.t.T(i18n.KeyStatusCompletionLoading), false)
+	if len(ctx.Tables) > 0 {
+		return m.loadContextColumnsCmd(ctx)
+	}
+	if qualifier != "" {
+		return m.loadColumnsCmd(qualifier)
+	}
+	return nil
+}
+
+func (m *Model) loadContextColumnsCmd(ctx ac.Context) tea.Cmd {
+	conn := m.conn
+	if conn == nil {
+		m.completionLoading = false
+		m.completionLoadKey = ""
+		return nil
+	}
+	id := m.connectSeq
+	schemas := make(map[string]string, len(m.tableSchemas))
+	for name, schema := range m.tableSchemas {
+		schemas[name] = schema
+	}
+	refs := make([]ac.TableRef, 0, len(ctx.Tables))
+	for _, ref := range ctx.Tables {
+		if m.completer.HasColumns(ref.Table) {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	if len(refs) == 0 {
+		m.completionLoading = false
+		m.completionLoadKey = ""
+		return nil
+	}
+	return func() tea.Msg {
+		sets := make([]completionColumnSet, 0, len(refs))
+		for _, ref := range refs {
+			schema := ref.Schema
+			if schema == "" {
+				schema = schemas[strings.ToLower(ref.Table)]
+			}
+			queryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			columns, err := conn.Catalog().Columns(queryCtx, schema, ref.Table)
+			cancel()
+			names := make([]string, 0, len(columns))
+			if err == nil {
+				for _, column := range columns {
+					names = append(names, column.Name)
+				}
+			}
+			sets = append(sets, completionColumnSet{table: ref.Table, alias: ref.Alias, columns: names})
+		}
+		return completionContextMsg{id: id, sets: sets}
+	}
 }
 
 func (m *Model) loadColumnsCmd(qualifier string) tea.Cmd {

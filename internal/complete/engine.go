@@ -131,7 +131,14 @@ func (e *Engine) Columns(table string) ([]string, bool) {
 	return out, true
 }
 
+// Suggest keeps the context-free behavior used when no statement analysis is
+// available.
 func (e *Engine) Suggest(word string) []Candidate {
+	return e.SuggestIn(word, Context{})
+}
+
+// SuggestIn filters candidates by the statement context around the cursor.
+func (e *Engine) SuggestIn(word string, ctx Context) []Candidate {
 	qualifier, prefix := SplitWord(word)
 	prefixLower := strings.ToLower(prefix)
 
@@ -139,13 +146,28 @@ func (e *Engine) Suggest(word string) []Candidate {
 	defer e.mu.RUnlock()
 
 	if qualifier != "" {
-		cols, ok := e.columns[strings.ToLower(qualifier)]
+		table := qualifier
+		if resolved, ok := ResolveTable(ctx, qualifier); ok {
+			table = resolved
+		}
+		cols, ok := e.columns[strings.ToLower(table)]
 		if !ok {
 			return nil
 		}
 		return filterText(cols, prefixLower, KindColumn)
 	}
 
+	switch ctx.Kind {
+	case ContextTable:
+		return filterText(e.tables, prefixLower, KindTable)
+	case ContextColumn:
+		return e.columnSuggestions(prefixLower, ctx)
+	default:
+		return e.anySuggestions(prefixLower)
+	}
+}
+
+func (e *Engine) anySuggestions(prefixLower string) []Candidate {
 	out := make([]Candidate, 0, 32)
 	seen := map[string]bool{}
 	add := func(text string, kind Kind) {
@@ -159,12 +181,7 @@ func (e *Engine) Suggest(word string) []Candidate {
 	for _, table := range e.tables {
 		add(table, KindTable)
 	}
-	tables := make([]string, 0, len(e.columns))
-	for table := range e.columns {
-		tables = append(tables, table)
-	}
-	sort.Strings(tables)
-	for _, table := range tables {
+	for _, table := range e.columnTables() {
 		for _, column := range e.columns[table] {
 			add(column, KindColumn)
 		}
@@ -176,6 +193,65 @@ func (e *Engine) Suggest(word string) []Candidate {
 		add(k, KindKeyword)
 	}
 	return out
+}
+
+// columnSuggestions lists columns from the tables in the current statement.
+// Without table references it falls back to every cached column.
+func (e *Engine) columnSuggestions(prefixLower string, ctx Context) []Candidate {
+	out := make([]Candidate, 0, 32)
+	seen := map[string]bool{}
+	add := func(text string, kind Kind) {
+		key := strings.ToLower(text)
+		if !strings.HasPrefix(key, prefixLower) || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, Candidate{Text: text, Kind: kind})
+	}
+
+	columns := make([]string, 0, 16)
+	colSeen := map[string]bool{}
+	addColumn := func(column string) {
+		key := strings.ToLower(column)
+		if colSeen[key] {
+			return
+		}
+		colSeen[key] = true
+		columns = append(columns, column)
+	}
+	if len(ctx.Tables) > 0 {
+		for _, ref := range ctx.Tables {
+			for _, column := range e.columns[strings.ToLower(ref.Table)] {
+				addColumn(column)
+			}
+		}
+	} else {
+		for _, table := range e.columnTables() {
+			for _, column := range e.columns[table] {
+				addColumn(column)
+			}
+		}
+	}
+	sort.Strings(columns)
+	for _, column := range columns {
+		add(column, KindColumn)
+	}
+	for _, f := range functions {
+		add(f, KindFunction)
+	}
+	for _, k := range keywords {
+		add(k, KindKeyword)
+	}
+	return out
+}
+
+func (e *Engine) columnTables() []string {
+	tables := make([]string, 0, len(e.columns))
+	for table := range e.columns {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+	return tables
 }
 
 func SplitWord(word string) (qualifier, prefix string) {

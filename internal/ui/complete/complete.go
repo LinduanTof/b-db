@@ -51,6 +51,11 @@ func (m Model) IsOpen() bool { return m.open }
 
 func (m Model) Prefix() string { return m.prefix }
 
+// Candidates returns the currently offered candidates.
+func (m Model) Candidates() []ac.Candidate {
+	return append([]ac.Candidate(nil), m.candidates...)
+}
+
 func (m *Model) Update(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":

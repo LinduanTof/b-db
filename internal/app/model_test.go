@@ -81,7 +81,7 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			sidebar.TableActivateMsg, sidebar.EditorOpenMsg, sidebar.ConnectionInfoMsg, sidebar.NodeMenuMsg, overviewLoadedMsg, versionLoadedMsg,
 			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg,
 			form.SubmittedMsg, schemaDoneMsg, indexesMenuMsg,
-			importPreviewMsg, importProgressMsg, importedMsg:
+			importPreviewMsg, importProgressMsg, importedMsg, completionContextMsg:
 		default:
 			return m
 		}

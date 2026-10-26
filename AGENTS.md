@@ -129,6 +129,8 @@ func (m *Model) View() string
 - `make release` 不会注入版本号;goreleaser 通过 `-X main.version={{.Version}}` 注入。Makefile 构建的二进制版本显示为 `dev`。
 - 根 `Model.Update` 对许多消息会提前返回;新增需要响应尺寸或焦点变化的状态时,还要同步修改 `layout()`/窗口尺寸分支。
 - 异步处理器必须检查 `querySeq`/消息 id;取消和超时错误需先用 `errors.Is` 判断,再显示通用失败信息。
+- SQL 补全由 `complete.Analyze(value, cursor)` 分析当前语句:`FROM`/`JOIN`/`UPDATE`/`INTO` 后为表上下文,`WHERE`/`AND`/`OR`/`ON`/运算符后为列上下文,并从整个语句(包括光标之后)提取 FROM/JOIN 表与别名。`Engine.SuggestIn` 按上下文过滤;缺失的 FROM 列由 `loadContextColumnsCmd` 后台批量加载并注册表名与别名,完成后用 `refreshCompletion(true)` 重开弹窗;`completionLoading`/`completionLoadKey` 防止每次击键重复加载。
+- 补全弹窗用 `editor.CursorScreen()` 取光标在编辑器内的视觉行/列,结合 `editorPaneOrigin()` 定位;`textutil.OverlayAt` 负责绝对坐标绘制与屏幕内裁剪,`layout()` 的 defer 会把补全尺寸同步为编辑器面板大小。
 - 编辑器自绘渲染基于视觉行:View 通过 `prepare` 维护行级缓存(每行 token、视觉行数与前缀和),只重算改动行;点击/滚动/查找用 `cacheStart` 前缀和定位。`lastCursorRow` 用来区分"光标移动"与"滚轮":只有光标行变化时 View 才跟随,否则滚轮后的视口会被光标拉回。`setCursor` 在移动期间临时放宽 textarea 宽度,否则软换行会让 `CursorDown` 按视觉行移动并提前结束。
 - 导入在预览确认框出现时只记录 `pendingImport`;用户确认后才创建 `importCmd` 并置 `importing`,取消或关闭浮层必须同时清空两者,否则 `importing` 会永久拦截 `Esc`。
 - `tea.PasteMsg` 必须经 `handlePaste` 路由到最上层输入组件(form/连接表单/单元格编辑/路径输入/查找),不能直接转发给 editor,否则会污染背后的 SQL。

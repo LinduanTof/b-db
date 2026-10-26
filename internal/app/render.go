@@ -13,6 +13,7 @@ import (
 )
 
 func (m *Model) layout() {
+	defer m.syncCompletionSize()
 	if m.width < 20 || m.height < 6 {
 		return
 	}
@@ -128,7 +129,9 @@ func (m *Model) render() string {
 		return textutil.Overlay(base, m.connForm.View(), m.width, m.height)
 	}
 	if m.completion.IsOpen() {
-		return textutil.Overlay(base, m.completion.View(), m.width, m.height)
+		popup := m.completion.View()
+		x, y := m.completionPosition(popup)
+		return textutil.OverlayAt(base, popup, x, y, m.width, m.height)
 	}
 	return base
 }
@@ -242,6 +245,87 @@ func (m *Model) resultsPaneTitle() string {
 	default:
 		return m.t.T(i18n.KeyPaneResults)
 	}
+}
+
+// editorPaneSize returns the dimensions of the editor pane.
+func (m *Model) editorPaneSize() (int, int) {
+	if m.effectiveZoom() {
+		return m.width, m.editorH
+	}
+	if m.columnsActive {
+		return m.editorW, m.editorH
+	}
+	return m.rightW, m.editorH
+}
+
+// editorPaneOrigin returns the screen position of the editor pane's top-left
+// corner, and whether the editor is currently visible.
+func (m *Model) editorPaneOrigin() (int, int, bool) {
+	if m.effectiveZoom() {
+		if m.focus != focusEditor {
+			return 0, 0, false
+		}
+		return 0, 0, true
+	}
+	left := m.sideW + 1
+	if m.columnsActive {
+		return left, 0, true
+	}
+	if m.layoutMode == config.LayoutResultsTop {
+		return left, m.resultsH + 1, true
+	}
+	return left, 0, true
+}
+
+func (m *Model) syncCompletionSize() {
+	w, h := m.editorPaneSize()
+	m.completion.SetSize(max(20, w), max(4, h))
+}
+
+// completionPosition places the completion popup under the cursor, flipping
+// above it when there is no room below. Coordinates are screen cells.
+func (m *Model) completionPosition(popup string) (int, int) {
+	lines := strings.Split(popup, "\n")
+	popupW, popupH := 0, len(lines)
+	for _, line := range lines {
+		popupW = max(popupW, textutil.Width(line))
+	}
+	left, top, ok := m.editorPaneOrigin()
+	if !ok {
+		return max(0, (m.width-popupW)/2), max(0, (m.height-popupH)/2)
+	}
+	row, col, visible := m.editor.CursorScreen()
+	if !visible {
+		row, col = 0, 0
+	}
+	bodyTop := top + 2 // pane title + tab bar
+	x := left + col
+	paneW, _ := m.editorPaneSize()
+	if x+popupW > left+paneW {
+		if shifted := left + paneW - popupW; shifted >= left {
+			x = shifted
+		} else {
+			x = max(0, m.width-popupW)
+		}
+	}
+	if x < 0 {
+		x = 0
+	}
+	below := bodyTop + row + 1
+	above := bodyTop + row - popupH
+	y := below
+	limit := max(0, m.height-2) // keep the status and menu bars visible
+	if y+popupH > limit {
+		if above >= bodyTop {
+			y = above
+		} else {
+			y = max(0, limit-popupH)
+		}
+	}
+	if y < 0 {
+		y = 0
+	}
+	return x, y
 }
 
 func (m *Model) resultsPaneHint() string {

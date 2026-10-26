@@ -361,3 +361,51 @@ func TestLayoutCacheHandlesResize(t *testing.T) {
 		}
 	}
 }
+
+func TestCursorScreenPosition(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(40, 6)
+	m.SetValue("select name")
+	m.Focus()
+	m.setCursor(0, 7)
+	row, col, ok := m.CursorScreen()
+	if !ok || row != 0 || col != 9 {
+		t.Fatalf("cursor screen = %d,%d ok=%v, want 0,9", row, col, ok)
+	}
+}
+
+func TestCursorScreenOnWrappedRow(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(20, 6)
+	m.SetValue(strings.Repeat("a", 40))
+	m.Focus()
+	m.setCursor(0, 40)
+	_ = m.View()
+	row, col, ok := m.CursorScreen()
+	if !ok || row != 2 || col != 6 {
+		t.Fatalf("cursor screen = %d,%d ok=%v, want 2,6", row, col, ok)
+	}
+}
+
+func TestCursorScreenHiddenWhenScrolledAway(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(20, 3)
+	m.SetValue("1\n2\n3\n4\n5\n6\n7\n8")
+	m.Focus()
+	m.setCursor(0, 0)
+	m.scrollRow = 6
+	if _, _, ok := m.CursorScreen(); ok {
+		t.Fatal("cursor should be reported as hidden")
+	}
+}
+
+func TestCursorOffset(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(40, 6)
+	m.SetValue("ab\ncd")
+	m.Focus()
+	m.setCursor(1, 1)
+	if got := m.CursorOffset(); got != 4 {
+		t.Fatalf("cursor offset = %d, want 4", got)
+	}
+}

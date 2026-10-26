@@ -406,7 +406,14 @@ Editor queries have no row limit and load their results into memory at once; add
 
 ## SQL autocomplete
 
-Completion pops up while you type identifiers and can be triggered with `Ctrl+Space`. Candidates include SQL keywords, common functions, every table in the current connection and loaded column names; typing `users.` loads that table's columns on demand. Use `↑`/`↓` to select, `Tab` or `Enter` to accept and `Esc` to close.
+Completion is context-aware and can also be triggered with `Ctrl+Space`:
+
+- after `FROM`, `JOIN`, `UPDATE` or `INTO` it lists tables
+- after `WHERE`, `AND`, `OR`, `ON`, `HAVING`, `ORDER BY`/`GROUP BY` and comparison operators it lists columns from the tables referenced by the current statement
+- typing an alias or table name followed by `.` lists that table's columns
+- elsewhere it offers SQL keywords, common functions, tables and cached columns
+
+Use `↑`/`↓` to select, `Tab` or `Enter` to accept and `Esc` to close. The popup opens just below the cursor, flips above it when there is no room, and stays within the editor pane.
 
 ![SQL autocomplete](docs/images/en/03-autocomplete.png)
 

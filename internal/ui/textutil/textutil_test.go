@@ -44,3 +44,26 @@ func TestOverlayIntoShortBase(t *testing.T) {
 		}
 	}
 }
+
+func TestOverlayAtPositionsModal(t *testing.T) {
+	base := "..........\n..........\n.........."
+	got := OverlayAt(base, "XX", 2, 1, 10, 3)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("lines = %d", len(lines))
+	}
+	if !strings.HasPrefix(lines[1], "..XX") {
+		t.Fatalf("modal not at (2,1): %q", lines[1])
+	}
+	if lines[0] != ".........." {
+		t.Fatalf("first line changed: %q", lines[0])
+	}
+}
+
+func TestOverlayAtClampsToScreen(t *testing.T) {
+	got := OverlayAt("....\n....", "XX", 99, 99, 4, 2)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 2 || lines[1] != "..XX" {
+		t.Fatalf("modal was not clamped: %q", lines)
+	}
+}

@@ -75,6 +75,21 @@ func (m *Model) Blur() { m.ta.Blur() }
 
 func (m Model) Value() string { return m.ta.Value() }
 
+// CursorOffset returns the cursor position as a rune offset into Value.
+func (m Model) CursorOffset() int {
+	line := m.ta.Line()
+	col := max(0, m.ta.Column())
+	if line <= 0 {
+		return col
+	}
+	lines := strings.Split(m.ta.Value(), "\n")
+	offset := 0
+	for i := 0; i < line && i < len(lines); i++ {
+		offset += len([]rune(lines[i])) + 1
+	}
+	return offset + col
+}
+
 func (m *Model) SetValue(s string) {
 	m.ta.SetValue(s)
 	m.ta.CursorEnd()
@@ -412,6 +427,37 @@ func (m *Model) HandleClick(x, y int) bool {
 	m.setCursor(line, col)
 	m.lastCursorRow = -1
 	return true
+}
+
+// CursorScreen returns the cursor position relative to the editor body (the
+// same coordinates as View) and whether it is currently visible. The column
+// includes the line-number gutter.
+func (m *Model) CursorScreen() (int, int, bool) {
+	if m.width <= 0 || m.height <= 0 {
+		return 0, 0, false
+	}
+	value := m.ta.Value()
+	lineCount := strings.Count(value, "\n") + 1
+	gutter := len(strconv.Itoa(lineCount)) + 1
+	textWidth := max(1, m.width-gutter)
+	lines, _, starts := m.prepare(value, textWidth)
+
+	cursorLine := min(max(m.ta.Line(), 0), len(lines)-1)
+	runes := []rune(lines[cursorLine])
+	cursorCol := min(max(m.ta.Column(), 0), len(runes))
+	segment := segmentForCol(runes, cursorCol, textWidth)
+	row := starts[cursorLine] + segment - m.scrollRow
+	if row < 0 || row >= m.height {
+		return 0, 0, false
+	}
+
+	bounds := segmentBoundsAll(runes, textWidth)
+	start := bounds[min(segment, len(bounds)-1)][0]
+	col := gutter
+	for i := start; i < cursorCol; i++ {
+		col += runewidth.RuneWidth(runes[i])
+	}
+	return row, col, true
 }
 
 // Scroll moves the viewport without moving the cursor.

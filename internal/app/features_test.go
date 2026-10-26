@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	ac "github.com/LinduanTof/dbrix/internal/complete"
 	"github.com/LinduanTof/dbrix/internal/config"
 	"github.com/LinduanTof/dbrix/internal/db"
 	"github.com/LinduanTof/dbrix/internal/ui/sidebar"
@@ -660,5 +661,152 @@ func TestViewMenuHidesWriteActions(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("view menu should still offer data preview: %#v", items)
+	}
+}
+
+func TestCompletionFollowsCursor(t *testing.T) {
+	m := testModel(t, "en")
+	m.focus = focusEditor
+	m.layout()
+	m.editor.SetValue("")
+	m.completion.Open("se", []ac.Candidate{{Text: "SELECT", Kind: ac.KindKeyword}})
+	popup := m.completion.View()
+	if popup == "" {
+		t.Fatal("completion popup is empty")
+	}
+	x, y := m.completionPosition(popup)
+	if x != m.sideW+1+2 || y != 3 {
+		t.Fatalf("popup at %d,%d, want %d,3", x, y, m.sideW+1+2)
+	}
+
+	m.editor.SetValue("a\nb\nc")
+	m.editor.HandleClick(2, 2)
+	_ = m.editor.View()
+	x, y = m.completionPosition(m.completion.View())
+	if x != m.sideW+1+2 {
+		t.Fatalf("x = %d, want %d", x, m.sideW+1+2)
+	}
+	if y != 5 {
+		t.Fatalf("y = %d, want 5", y)
+	}
+}
+
+func TestCompletionSuggestsTablesAfterFrom(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.focus = focusEditor
+	m.editor.SetValue("SELECT * FROM ")
+	if cmd := m.refreshCompletion(false); cmd != nil {
+		t.Fatalf("table context should not load columns")
+	}
+	if !m.completion.IsOpen() {
+		t.Fatal("popup should open after FROM")
+	}
+	found := false
+	for _, candidate := range m.completion.Candidates() {
+		if candidate.Kind != ac.KindTable {
+			t.Fatalf("table context offered %+v", candidate)
+		}
+		if candidate.Text == "users" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("candidates = %+v", m.completion.Candidates())
+	}
+}
+
+func TestCompletionSuggestsWhereColumns(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.focus = focusEditor
+	m.editor.SetValue("SELECT * FROM users WHERE ")
+	cmd := m.refreshCompletion(false)
+	if cmd == nil {
+		t.Fatal("where context should load columns")
+	}
+	m = runCmd(t, m, cmd)
+	if !m.completer.HasColumns("users") {
+		t.Fatal("users columns were not cached")
+	}
+	if !m.completion.IsOpen() {
+		t.Fatalf("popup should open after loading: %s", m.status)
+	}
+	found := false
+	for _, candidate := range m.completion.Candidates() {
+		if candidate.Kind == ac.KindTable {
+			t.Fatalf("column context offered table %q", candidate.Text)
+		}
+		if candidate.Text == "email" && candidate.Kind == ac.KindColumn {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("candidates = %+v", m.completion.Candidates())
+	}
+}
+
+func TestCompletionUsesAliasColumns(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.focus = focusEditor
+	m.editor.SetValue("SELECT * FROM users u WHERE u.")
+	cmd := m.refreshCompletion(false)
+	if cmd == nil {
+		t.Fatal("alias qualifier should load columns")
+	}
+	m = runCmd(t, m, cmd)
+	if !m.completion.IsOpen() {
+		t.Fatalf("popup should open: %s", m.status)
+	}
+	found := false
+	for _, candidate := range m.completion.Candidates() {
+		if candidate.Text == "email" && candidate.Kind == ac.KindColumn {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("candidates = %+v", m.completion.Candidates())
+	}
+}
+
+func TestCompletionNeedsTrigger(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.focus = focusEditor
+	m.editor.SetValue("SELECT * ")
+	if cmd := m.refreshCompletion(false); cmd != nil {
+		t.Fatalf("unexpected load")
+	}
+	if m.completion.IsOpen() {
+		t.Fatal("popup should not open without a trigger or prefix")
+	}
+}
+
+func TestCompletionEscClosesPopup(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.focus = focusEditor
+	m.editor.SetValue("SELECT * FROM ")
+	m.refreshCompletion(false)
+	if !m.completion.IsOpen() {
+		t.Fatal("popup should be open")
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.completion.IsOpen() {
+		t.Fatal("esc should close the popup")
+	}
+	if m.options.IsOpen() {
+		t.Fatal("esc should not open the options menu while completing")
 	}
 }

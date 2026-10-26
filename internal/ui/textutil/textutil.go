@@ -53,6 +53,22 @@ func Overlay(base, modal string, width, height int) string {
 	if width <= 0 || height <= 0 {
 		return base
 	}
+	modalLines := strings.Split(modal, "\n")
+	modalW := 0
+	for _, line := range modalLines {
+		modalW = max(modalW, ansi.StringWidth(line))
+	}
+	x := max(0, (width-modalW)/2)
+	y := max(0, (height-len(modalLines))/2)
+	return OverlayAt(base, modal, x, y, width, height)
+}
+
+// OverlayAt draws modal with its top-left corner at (x, y). The position is
+// shifted when needed so the modal stays inside the screen.
+func OverlayAt(base, modal string, x, y, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return base
+	}
 	baseLines := strings.Split(base, "\n")
 	modalLines := strings.Split(modal, "\n")
 	for len(baseLines) < height {
@@ -66,8 +82,19 @@ func Overlay(base, modal string, width, height int) string {
 	for _, line := range modalLines {
 		modalW = max(modalW, ansi.StringWidth(line))
 	}
-	x := max(0, (width-modalW)/2)
-	y := max(0, (height-len(modalLines))/2)
+	modalW = min(modalW, width)
+	if x+modalW > width {
+		x = max(0, width-modalW)
+	}
+	if x < 0 {
+		x = 0
+	}
+	if y+len(modalLines) > height {
+		y = max(0, height-len(modalLines))
+	}
+	if y < 0 {
+		y = 0
+	}
 
 	for i, modalLine := range modalLines {
 		row := y + i
