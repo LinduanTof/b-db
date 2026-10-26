@@ -44,6 +44,8 @@ type Model struct {
 	pageInfo     string
 
 	order   []int
+	visible []int
+	filter  string
 	sortCol int
 	sortAsc bool
 }
@@ -67,6 +69,8 @@ func (m *Model) SetResult(rs *db.ResultSet) {
 	m.scrollRow, m.scrollCol = 0, 0
 	m.sortCol = -1
 	m.sortAsc = true
+	m.filter = ""
+	m.visible = nil
 	m.order = make([]int, len(rs.Rows))
 	for i := range m.order {
 		m.order[i] = i
@@ -81,6 +85,7 @@ func (m *Model) SetResult(rs *db.ResultSet) {
 		}
 		m.cells[i] = converted
 	}
+	m.applyFilter()
 	m.computeWidths()
 }
 
@@ -92,6 +97,8 @@ func (m *Model) SetExec(affected int64, elapsed time.Duration) {
 	m.errText = ""
 	m.affected = &affected
 	m.elapsed = elapsed
+	m.filter = ""
+	m.order, m.visible = nil, nil
 }
 
 func (m *Model) SetError(text string) {
@@ -101,6 +108,8 @@ func (m *Model) SetError(text string) {
 	m.querySQL, m.pageInfo = "", ""
 	m.affected = nil
 	m.errText = text
+	m.filter = ""
+	m.order, m.visible = nil, nil
 }
 
 func (m *Model) SetPage(sql, info string) {
@@ -117,13 +126,11 @@ func (m Model) OrderedResult() *db.ResultSet {
 		return nil
 	}
 	out := *m.rs
-	if len(m.order) == len(m.rs.Rows) && len(m.order) > 0 {
-		rows := make([][]any, len(m.order))
-		for i, index := range m.order {
-			rows[i] = m.rs.Rows[index]
-		}
-		out.Rows = rows
+	rows := make([][]any, len(m.visible))
+	for i, index := range m.visible {
+		rows[i] = m.rs.Rows[index]
 	}
+	out.Rows = rows
 	return &out
 }
 
@@ -137,8 +144,42 @@ func (m *Model) Clear() {
 	m.cursorRow, m.cursorCol = 0, 0
 	m.scrollRow, m.scrollCol = 0, 0
 	m.order = nil
+	m.visible = nil
+	m.filter = ""
 	m.sortCol = -1
 	m.sortAsc = true
+}
+
+// SetFilter keeps only rows that contain text in any column. Matching is
+// case-insensitive and applies to the displayed strings.
+func (m *Model) SetFilter(text string) {
+	m.filter = text
+	m.applyFilter()
+	m.cursorRow = 0
+	m.scrollRow = 0
+	m.ensureVisible()
+}
+
+func (m Model) Filter() string { return m.filter }
+
+func (m *Model) applyFilter() {
+	if m.filter == "" {
+		m.visible = append(m.visible[:0], m.order...)
+		return
+	}
+	needle := strings.ToLower(m.filter)
+	m.visible = m.visible[:0]
+	for _, index := range m.order {
+		if index < 0 || index >= len(m.cells) {
+			continue
+		}
+		for _, cell := range m.cells[index] {
+			if strings.Contains(strings.ToLower(cell), needle) {
+				m.visible = append(m.visible, index)
+				break
+			}
+		}
+	}
 }
 
 func (m *Model) computeWidths() {
@@ -187,8 +228,8 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case "g":
 		m.cursorRow = 0
 	case "G":
-		if len(m.cells) > 0 {
-			m.cursorRow = len(m.cells) - 1
+		if len(m.visible) > 0 {
+			m.cursorRow = len(m.visible) - 1
 		}
 	case "pgup":
 		m.moveRow(-max(1, m.bodyRows()))
@@ -214,10 +255,10 @@ func (m *Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m *Model) moveRow(delta int) {
-	if len(m.cells) == 0 {
+	if len(m.visible) == 0 {
 		return
 	}
-	m.cursorRow = min(max(m.cursorRow+delta, 0), len(m.cells)-1)
+	m.cursorRow = min(max(m.cursorRow+delta, 0), len(m.visible)-1)
 }
 
 func (m *Model) moveCol(delta int) {
@@ -263,6 +304,7 @@ func (m *Model) resetOrder() {
 	for i := range m.order {
 		m.order[i] = i
 	}
+	m.applyFilter()
 	m.cursorRow = 0
 	m.scrollRow = 0
 }
@@ -288,6 +330,7 @@ func (m *Model) applyOrder() {
 		}
 		return cmp > 0
 	})
+	m.applyFilter()
 }
 
 func valueAt(rows [][]any, row, col int) any {
@@ -337,13 +380,10 @@ func compareValues(a, b any) int {
 }
 
 func (m Model) CursorCell() string {
-	if len(m.cells) == 0 || len(m.widths) == 0 || m.cursorRow >= len(m.cells) {
+	if len(m.cells) == 0 || len(m.widths) == 0 || m.cursorRow >= len(m.visible) {
 		return ""
 	}
-	row := m.cursorRow
-	if row < len(m.order) {
-		row = m.order[row]
-	}
+	row := m.visible[m.cursorRow]
 	if m.cursorCol >= len(m.cells[row]) {
 		return ""
 	}
@@ -354,13 +394,10 @@ func (m Model) CursorCell() string {
 // cell exists. Unlike CursorCell it preserves NULL, newlines and other control
 // characters so callers can edit the value safely.
 func (m Model) CursorValue() (any, bool) {
-	if m.rs == nil || len(m.cells) == 0 || m.cursorRow >= len(m.cells) {
+	if m.rs == nil || len(m.cells) == 0 || m.cursorRow >= len(m.visible) {
 		return nil, false
 	}
-	row := m.cursorRow
-	if row < len(m.order) {
-		row = m.order[row]
-	}
+	row := m.visible[m.cursorRow]
 	if row >= len(m.rs.Rows) || m.cursorCol >= len(m.rs.Rows[row]) {
 		return nil, false
 	}
@@ -398,16 +435,10 @@ func (m Model) Source() (schema, table string, ok bool) {
 }
 
 func (m Model) RowKey(columns []string) (map[string]any, bool) {
-	if m.rs == nil || len(m.cells) == 0 || len(columns) == 0 {
+	if m.rs == nil || len(columns) == 0 || m.cursorRow < 0 || m.cursorRow >= len(m.visible) {
 		return nil, false
 	}
-	row := m.cursorRow
-	if row < 0 || row >= len(m.cells) {
-		return nil, false
-	}
-	if row < len(m.order) {
-		row = m.order[row]
-	}
+	row := m.visible[m.cursorRow]
 	if row >= len(m.rs.Rows) {
 		return nil, false
 	}
@@ -437,13 +468,10 @@ func (m Model) CursorColumnName() string {
 
 // CursorRow returns the raw values of the selected row in display order.
 func (m Model) CursorRow() ([]any, bool) {
-	if m.rs == nil || len(m.cells) == 0 || m.cursorRow < 0 || m.cursorRow >= len(m.cells) {
+	if m.rs == nil || m.cursorRow < 0 || m.cursorRow >= len(m.visible) {
 		return nil, false
 	}
-	row := m.cursorRow
-	if row < len(m.order) {
-		row = m.order[row]
-	}
+	row := m.visible[m.cursorRow]
 	if row < 0 || row >= len(m.rs.Rows) {
 		return nil, false
 	}
@@ -461,13 +489,10 @@ func (m *Model) SetRowMode(enabled bool) {
 }
 
 func (m Model) CursorText() string {
-	if m.rs == nil || len(m.cells) == 0 || len(m.widths) == 0 || m.cursorRow >= len(m.cells) {
+	if m.rs == nil || len(m.widths) == 0 || m.cursorRow >= len(m.visible) {
 		return ""
 	}
-	row := m.cursorRow
-	if row < len(m.order) {
-		row = m.order[row]
-	}
+	row := m.visible[m.cursorRow]
 	if row >= len(m.rs.Rows) || m.cursorCol >= len(m.rs.Rows[row]) {
 		return ""
 	}
@@ -490,11 +515,11 @@ func rawText(v any) string {
 }
 
 func (m *Model) HandleClick(x, y int) bool {
-	if y < 3 || len(m.cells) == 0 {
+	if y < 3 || len(m.visible) == 0 {
 		return false
 	}
 	row := m.scrollRow + (y - 3)
-	if row < 0 || row >= len(m.cells) {
+	if row < 0 || row >= len(m.visible) {
 		return false
 	}
 	cursorX := 1
@@ -546,7 +571,7 @@ func (m *Model) bodyRows() int {
 }
 
 func (m *Model) footerHeight() int {
-	if m.querySQL != "" || m.pageInfo != "" {
+	if m.querySQL != "" || m.pageInfo != "" || m.filter != "" {
 		return 1
 	}
 	return 0
@@ -561,7 +586,7 @@ func (m *Model) footerLines() []string {
 }
 
 func (m *Model) footerLine() string {
-	if m.querySQL == "" && m.pageInfo == "" {
+	if m.querySQL == "" && m.pageInfo == "" && m.filter == "" {
 		return ""
 	}
 	sqlPart := ""
@@ -569,6 +594,14 @@ func (m *Model) footerLine() string {
 		sqlPart = m.t.T(i18n.KeyResultsSQL) + " " + m.querySQL
 	}
 	meta := m.pageInfo
+	if m.filter != "" {
+		filtered := fmt.Sprintf(m.t.T(i18n.KeyResultsFiltered), len(m.visible), len(m.cells))
+		if meta == "" {
+			meta = filtered
+		} else {
+			meta = filtered + " · " + meta
+		}
+	}
 	if sqlPart == "" {
 		return theme.Footer.Render(textutil.FitLine(" "+footerTruncate(meta, max(0, m.width-1)), m.width))
 	}
@@ -669,12 +702,12 @@ func (m *Model) View() string {
 	lines = append(lines, m.renderHeader(layout))
 	lines = append(lines, m.borderLine(layout, borderMid))
 
-	if len(m.cells) == 0 {
+	if len(m.visible) == 0 {
 		if m.bodyRows() > 0 {
 			lines = append(lines, m.messageRow(m.t.T(i18n.KeyNoRows)))
 		}
 	} else {
-		for r := m.scrollRow; r < len(m.cells) && len(lines) < gridHeight-1; r++ {
+		for r := m.scrollRow; r < len(m.visible) && len(lines) < gridHeight-1; r++ {
 			lines = append(lines, m.renderRow(layout, r, r == m.cursorRow))
 		}
 	}
@@ -753,10 +786,10 @@ func (m *Model) renderHeader(layout []column) string {
 }
 
 func (m *Model) renderRow(layout []column, r int, selected bool) string {
-	actual := r
-	if r < len(m.order) {
-		actual = m.order[r]
+	if r < 0 || r >= len(m.visible) {
+		return m.emptyRow(layout)
 	}
+	actual := m.visible[r]
 	if actual >= len(m.cells) {
 		return m.emptyRow(layout)
 	}

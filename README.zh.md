@@ -9,7 +9,7 @@
 
 一款面向 Linux 终端的现代化数据库管理工具，使用 Go + [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) 构建。目标是在一个终端窗口内完成连接管理、库表浏览、SQL 编辑执行、数据编辑与导出。
 
-已完成：PostgreSQL/MySQL/SQLite 浏览与查询、事务化数据编辑、Redis/MongoDB、多会话、表结构/DDL/索引、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、6 套主题、SQL 语法高亮与自动补全、专注布局与鼠标操作。
+已完成：PostgreSQL/MySQL/SQLite 浏览与查询、事务化数据编辑与新增行、CSV/JSON 导入、表结构管理（建表/删表/改表/索引）、Redis/MongoDB、多会话、表结构/DDL/索引、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、6 套主题、SQL 语法高亮与自动补全、编辑器查找、EXPLAIN 执行计划、结果集过滤、专注布局与鼠标操作。
 
 ## 界面预览
 
@@ -155,6 +155,8 @@ connections:
 | 编辑器 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 下一个 / 上一个标签 |
 | 编辑器 | `Alt+←` / `Alt+→` | 切换标签（终端不支持 `Ctrl+Tab` 时使用） |
 | 编辑器 | `Ctrl+Space` | 手动触发 SQL 补全 |
+| 编辑器 | `Ctrl+F` | 在编辑器中查找（`Enter`/`↓` 下一个，`Shift+Enter`/`↑` 上一个，`Esc` 关闭） |
+| 编辑器 | `Alt+E` | 对第一条语句显示 `EXPLAIN` 执行计划 |
 | 编辑器 | `Ctrl+P` / `Ctrl+N` | 查询历史 |
 | 编辑器 | `Esc` | 取消正在执行的查询 |
 | 结果 | 方向键 / `hjkl` | 移动单元格 |
@@ -168,7 +170,7 @@ connections:
 | 结果 | `[` / `]` | 减小 / 增大当前列宽 |
 | 结果 | `o` / `O` | 按当前列排序（升/降）/ 清除排序 |
 | 结果 | `r` | 刷新当前数据库的表概览 |
-| 结果 | `/` | 过滤表概览（按 schema、表名、类型） |
+| 结果 | `/` | 过滤表概览或当前结果行 |
 | 结果 | `c` | 复制当前单元格（OSC 52） |
 | 结果 | `Ctrl+E` / `Ctrl+J` / `Ctrl+M` | 导出 CSV / JSON / Markdown |
 
@@ -270,6 +272,7 @@ connections:
 - 表数据预览会在结果表格下方以一行淡色显示 SQL、总行数、页码、当前页行数和查询时间；空间不足时优先截断 SQL 并保留统计信息
 - 分页查询只在结果面板进行，不会修改编辑器内容；单元格编辑或删除后会刷新当前页，不会跳回第一页
 - 客户端排序（`o`/`O`）只作用于当前页；表数据预览中的 `o`/`O` 会改用数据库 `ORDER BY` 重新查询，排序对所有页生效并回到第一页
+- `/` 会在原地过滤当前结果：对所有列做不区分大小写的匹配，底部显示 `可见/总数`，导出只包含可见行
 - 表概览的行数与大小是估算值（PostgreSQL `reltuples`/`pg_total_relation_size`，MySQL `information_schema`）；表注释来自 PostgreSQL `obj_description` 或 MySQL `TABLE_COMMENT`。无法获取时显示 `-`，SQLite、Redis、MongoDB 不提供行数、大小与注释
 
 ## 导出表与数据库
@@ -294,10 +297,35 @@ connections:
 - 在分页表数据中编辑或删除后，会重新加载当前页
 - 连接配置 `read_only: true` 时禁止单元格编辑和 SQL 写入语句，并额外拦截：SQL 的 `EXECUTE`、SQLite 的写入型 `PRAGMA`；Redis 中只放行常见只读命令，其余（含 `EVAL`/`FCALL`、`SETBIT`、`SORT ... STORE` 等）一律拒绝；MongoDB 的 `$out`、`$merge`、`$where`、`$function`、`$accumulator` 一律拒绝。这是保守的客户端检查，仍建议使用数据库只读账号或只读副本作为真正的安全边界。
 - 表操作菜单的「Insert row template」会生成 `INSERT` 模板到编辑器
+- 表操作菜单的「Insert row」会按列生成表单。留空表示不写入该列（使用列默认值），输入 `NULL` 写入空值，输入 `''` 写入空字符串；单列整数主键可以留空，由数据库生成。提交前预览 `INSERT`，执行在事务中进行且影响行数必须为 1
 
 ![单元格编辑](docs/images/05-cell-edit.png)
 
 *按 `e` 修改单元格，回车后先预览完整 `UPDATE` 语句，确认时才在事务中执行。*
+
+## 导入数据
+
+在 PostgreSQL、MySQL 和 SQLite 的表操作菜单中选择「Import data」：
+
+- 选择 CSV 或 JSON 文件、格式，以及 CSV 首行是否为表头
+- 有表头时按列名匹配（不区分大小写），未知列会报错；没有表头时按表列顺序映射
+- 值按目标列类型转换；CSV 的空字段写入 `NULL`，JSON 的 `null` 保持为 NULL
+- 确认框会显示列映射与前五行预览
+- 导入在单个事务中进行，读取是流式的，任一行失败会整体回滚；每 1,000 行更新一次进度，`Esc` 可取消
+- CSV 逐行流式读取；JSON 会整体解码，超大文件建议使用 CSV
+- `read_only: true` 的连接会拒绝导入
+
+## 表结构管理
+
+在侧栏选中表后按 `m`，选择「Manage」：
+
+- 删除表、清空表、重命名表
+- 添加列（列名、类型、是否可空、默认值）、删除列（从列列表中选择）
+- 创建索引（索引名、列、是否唯一）、删除索引（从索引列表中选择）
+
+选中数据库节点后选择「Create table」，输入表名和列定义（例如 `id INTEGER PRIMARY KEY, name TEXT`）即可建表。
+
+所有变更都会先显示生成的 SQL，按 `y` 后才执行。SQLite 的清空使用 `DELETE FROM`。`read_only` 连接会拒绝结构变更，且这些操作只对 PostgreSQL、MySQL 和 SQLite 提供。
 
 ## Redis 与 MongoDB
 
@@ -339,12 +367,15 @@ SQL 标签也按连接隔离：每个会话保存自己的标签列表和活动�
 - **View structure**：列、索引、外键详情
 - **View indexes**：索引列表
 - **Generate SELECT**：只生成查询填入编辑器，不执行
+- **Insert row**：按列生成表单并插入一行（仅 SQL 表）
+- **Import data**：从 CSV 或 JSON 导入数据（仅 SQL 表）
+- **Manage**：删除/清空/重命名表、添加或删除列、创建或删除索引（仅 SQL 表）
 
 DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc` 或 `q` 关闭。
 
 ![表操作菜单](docs/images/04-table-menu.png)
 
-*表操作菜单提供数据预览、DDL、结构、索引、生成 SELECT、插入行模板以及 SQL/Excel/CSV/JSON 导出。*
+*表操作菜单提供数据预览、DDL、结构、索引、生成 SELECT、新增行、导入、结构管理、插入行模板以及 SQL/Excel/CSV/JSON 导出。*
 
 ![表结构查看器](docs/images/06-structure.png)
 
@@ -352,7 +383,10 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 ## SQL 编辑器
 
-编辑器会按当前主题为 SQL 着色：关键字、函数、字符串、数字与注释分别使用不同颜色。支持多行编辑、行号、`Ctrl+Space` 自动补全与查询历史。
+编辑器会按当前主题为 SQL 着色：关键字、函数、字符串、数字与注释分别使用不同颜色。支持多行编辑、行号、`Ctrl+Space` 自动补全、查询历史、增量查找（`Ctrl+F`）与执行计划。
+
+- `Ctrl+F` 在编辑器面板的提示行打开查找框，输入时高亮所有匹配；`Enter`/`↓` 与 `Shift+Enter`/`↑` 在匹配之间循环，`Esc` 关闭
+- `Alt+E` 对编辑器中的第一条语句执行方言对应的 EXPLAIN：PostgreSQL 为 `EXPLAIN (FORMAT TEXT)`，MySQL 为 `EXPLAIN`，SQLite 为 `EXPLAIN QUERY PLAN`。不会使用 `ANALYZE`，因此写入语句不会真正执行
 
 编辑器查询不限制返回行数，结果会一次性载入内存；查询大表时请自行加 `LIMIT`。`query.max_rows` 只控制表数据浏览的分页大小。
 

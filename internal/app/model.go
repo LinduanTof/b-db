@@ -31,6 +31,7 @@ import (
 	"github.com/LinduanTof/b-db/internal/ui/connection"
 	"github.com/LinduanTof/b-db/internal/ui/detail"
 	"github.com/LinduanTof/b-db/internal/ui/editor"
+	"github.com/LinduanTof/b-db/internal/ui/form"
 	"github.com/LinduanTof/b-db/internal/ui/menu"
 	"github.com/LinduanTof/b-db/internal/ui/pathinput"
 	"github.com/LinduanTof/b-db/internal/ui/results"
@@ -109,6 +110,7 @@ type mutationDoneMsg struct {
 	id       uint64
 	kind     string
 	affected int64
+	table    *db.TableRef
 	err      error
 }
 
@@ -205,6 +207,10 @@ type Model struct {
 	cellEdit   celledit.Model
 	confirm    confirm.Model
 	dirInput   pathinput.Model
+	form       form.Model
+
+	formTarget  db.TableRef
+	formColumns []db.Column
 
 	pendingCmd tea.Cmd
 	pager      *pagination
@@ -260,6 +266,7 @@ type Model struct {
 	outDir    string
 	send      func(tea.Msg)
 	exporting bool
+	importing bool
 
 	infoName    string
 	infoStatus  string
@@ -328,6 +335,7 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.cellEdit = celledit.New(t)
 	m.confirm = confirm.New(t)
 	m.dirInput = pathinput.New(t)
+	m.form = form.New(t)
 	m.editCache = map[string]editInfo{}
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
@@ -363,6 +371,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cellEdit.SetSize(msg.Width, msg.Height)
 		m.confirm.SetSize(msg.Width, msg.Height)
 		m.dirInput.SetSize(msg.Width, msg.Height)
+		m.form.SetSize(msg.Width, msg.Height)
 		m.layout()
 		return m, nil
 	case tea.KeyPressMsg:
@@ -474,6 +483,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleDatabasesLoaded(msg)
 	case celledit.SubmittedMsg:
 		return m, m.openUpdateConfirm(msg.Value)
+	case form.SubmittedMsg:
+		return m, m.handleFormSubmit(msg)
 	case pathinput.SubmittedMsg:
 		m.applyExportDir(msg.Value)
 		return m, nil
@@ -492,6 +503,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(m.t.T(i18n.KeyErrorExport, msg.err), true)
 		} else {
 			m.setStatus(m.t.T(i18n.KeyStatusExported, msg.path), false)
+		}
+		return m, nil
+	case schemaDoneMsg:
+		return m, m.handleSchemaDone(msg)
+	case indexesMenuMsg:
+		return m, m.handleIndexesMenu(msg)
+	case importPreviewMsg:
+		return m, m.handleImportPreview(msg)
+	case importProgressMsg:
+		m.setStatus(m.t.T(i18n.KeyStatusImportingRows, msg.label, fmt.Sprint(msg.rows)), false)
+		return m, nil
+	case importedMsg:
+		m.importing = false
+		m.cancelMutation()
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
+		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				m.setStatus(m.t.T(i18n.KeyStatusCancelled), false)
+				return m, nil
+			}
+			m.setStatus(m.t.T(i18n.KeyErrorImport, msg.err), true)
+			return m, nil
+		}
+		m.setStatus(m.t.T(i18n.KeyStatusImported, msg.rows), false)
+		if m.pager != nil && m.pager.schema == msg.table.Schema && m.pager.table == msg.table.Name {
+			return m, m.refreshSource()
 		}
 		return m, nil
 	case exportProgressMsg:
@@ -685,7 +724,8 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 func (m *Model) anyOverlayOpen() bool {
 	return m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
 		m.detail.IsOpen() || m.connForm.IsOpen() || m.cellEdit.IsOpen() ||
-		m.confirm.IsOpen() || m.completion.IsOpen() || m.dirInput.IsOpen() || m.showHelp
+		m.confirm.IsOpen() || m.completion.IsOpen() || m.dirInput.IsOpen() ||
+		m.form.IsOpen() || m.showHelp
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -715,6 +755,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	if m.dirInput.IsOpen() {
 		var cmd tea.Cmd
 		m.dirInput, cmd = m.dirInput.Update(msg)
+		return cmd
+	}
+	if m.form.IsOpen() {
+		var cmd tea.Cmd
+		m.form, cmd = m.form.Update(msg)
 		return cmd
 	}
 	if m.textView.IsOpen() {
@@ -750,10 +795,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		switch key {
 		case "esc":
 			m.filtering = false
-			m.overviewFilter = ""
 			m.filterInput.SetValue("")
 			m.filterInput.Blur()
-			m.rebuildOverview()
+			if m.context == contextTables {
+				m.overviewFilter = ""
+				m.rebuildOverview()
+			} else {
+				m.results.SetFilter("")
+			}
 			return nil
 		case "enter":
 			m.filtering = false
@@ -762,10 +811,20 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		m.filterInput, cmd = m.filterInput.Update(msg)
-		if value := m.filterInput.Value(); value != m.overviewFilter {
-			m.overviewFilter = value
-			m.rebuildOverview()
+		value := m.filterInput.Value()
+		if m.context == contextTables {
+			if value != m.overviewFilter {
+				m.overviewFilter = value
+				m.rebuildOverview()
+			}
+		} else if value != m.results.Filter() {
+			m.results.SetFilter(value)
 		}
+		return cmd
+	}
+	if m.focus == focusEditor && m.editor.Finding() {
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.UpdateFind(msg)
 		return cmd
 	}
 	if m.showHelp {
@@ -783,8 +842,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	if key == "esc" {
-		if m.running {
+		if m.running || m.importing {
 			m.cancelQuery()
+			m.cancelMutation()
 			return nil
 		}
 		m.completion.Close()
@@ -843,6 +903,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.switchTab(1)
 		case "ctrl+shift+tab":
 			return m.switchTab(-1)
+		case "ctrl+f":
+			m.editor.OpenFind()
+			return nil
+		case "alt+e":
+			return m.explainQuery()
 		}
 		if (key == "alt+left" || key == "alt+right") && len(m.tabs) > 1 {
 			if key == "alt+left" {
@@ -929,6 +994,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			if m.context == contextTables {
 				m.filtering = true
 				m.filterInput.SetValue(m.overviewFilter)
+				m.filterInput.Focus()
+				return nil
+			}
+			if m.context == contextData {
+				m.filtering = true
+				m.filterInput.SetValue(m.results.Filter())
 				m.filterInput.Focus()
 				return nil
 			}
@@ -1162,6 +1233,44 @@ func (m *Model) runQuery() tea.Cmd {
 	}
 	m.setContext(contextQuery)
 	return m.runStatement(stmt, true, 0)
+}
+
+// explainQuery runs the first statement in the editor through the dialect's
+// EXPLAIN form. It never uses EXPLAIN ANALYZE, so the statement is not executed.
+func (m *Model) explainQuery() tea.Cmd {
+	if m.conn == nil {
+		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
+		return nil
+	}
+	stmt := strings.TrimSpace(m.editor.Value())
+	if stmt == "" {
+		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
+		return nil
+	}
+	typ := m.conn.Type()
+	var prefix string
+	switch typ {
+	case config.TypePostgres:
+		prefix = "EXPLAIN (FORMAT TEXT) "
+	case config.TypeMySQL:
+		prefix = "EXPLAIN "
+	case config.TypeSQLite:
+		prefix = "EXPLAIN QUERY PLAN "
+	default:
+		m.setStatus(m.t.T(i18n.KeyErrorExplain, typ), true)
+		return nil
+	}
+	stmts, err := sqlscript.SplitFor(stmt, typ)
+	if err != nil {
+		m.setStatus(m.t.T(i18n.KeyErrorQuery, err), true)
+		return nil
+	}
+	if len(stmts) == 0 {
+		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
+		return nil
+	}
+	m.setContext(contextQuery)
+	return m.runStatement(prefix+stmts[0], false, 0)
 }
 
 func (m *Model) runTableCommand(stmt string) tea.Cmd {
@@ -1810,6 +1919,9 @@ func (m *Model) tableMenuItems() []menu.Item {
 		{ID: "table.indexes", LabelKey: i18n.KeyTableIndexes, Kind: menu.KindAction},
 		{ID: "table.select", LabelKey: i18n.KeyTableSelect, Kind: menu.KindAction},
 		{ID: "table.insert", LabelKey: i18n.KeyMenuInsert, Kind: menu.KindAction},
+		{ID: "table.insertrow", LabelKey: i18n.KeyMenuInsertRow, Kind: menu.KindAction},
+		{ID: "table.import", LabelKey: i18n.KeyMenuImport, Kind: menu.KindAction},
+		{ID: "table.manage", LabelKey: i18n.KeyMenuManageTable, Kind: menu.KindAction},
 	}
 }
 
@@ -1852,6 +1964,11 @@ func (m *Model) nodeMenuItems(n sidebar.NodeMenuMsg) []menu.Item {
 			{ID: "db.close", LabelKey: i18n.KeyMenuCloseSession, Kind: menu.KindAction},
 		}
 		if sqlExportable(m.sessionType(n.SessionName)) {
+			items = append(items, menu.Item{
+				Kind: menu.KindHeader, LabelKey: i18n.KeyMenuManageTable,
+			}, menu.Item{
+				ID: "db.createtable", LabelKey: i18n.KeyMenuCreateTable, Kind: menu.KindAction,
+			})
 			items = append(items, exportMenuItems("db")...)
 		}
 		return items
@@ -1904,6 +2021,8 @@ func (m *Model) runNodeMenuAction(msg menu.ActionMsg) tea.Cmd {
 	case "db.close":
 		m.closeSession(n.SessionName)
 		return nil
+	case "db.createtable":
+		return m.openCreateTableForm(n.SessionName)
 	}
 	return nil
 }
@@ -1942,6 +2061,12 @@ func (m *Model) closeSession(name string) {
 func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	schema, table := m.menuNode.Schema, m.menuNode.Table
 	kind := m.menuNode.Sub
+	if strings.HasPrefix(msg.ID, "table.dropcolumn.") {
+		return m.confirmDropColumn(schema, table, strings.TrimPrefix(msg.ID, "table.dropcolumn."))
+	}
+	if strings.HasPrefix(msg.ID, "table.dropindex.") {
+		return m.confirmDropIndex(schema, table, strings.TrimPrefix(msg.ID, "table.dropindex."))
+	}
 	if strings.HasPrefix(msg.ID, "table.export.") {
 		return m.exportTableCmd(schema, table, strings.TrimPrefix(msg.ID, "table.export."))
 	}
@@ -1973,6 +2098,27 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 		return m.openIndexes(schema, table)
 	case "table.insert":
 		return m.editInfoCmd(schema, table, "insert")
+	case "table.insertrow":
+		return m.editInfoCmd(schema, table, "rowform")
+	case "table.import":
+		return m.editInfoCmd(schema, table, "import")
+	case "table.manage":
+		m.openManageMenu(schema, table)
+		return nil
+	case "table.droptable":
+		return m.confirmDropTable(schema, table)
+	case "table.truncate":
+		return m.confirmTruncateTable(schema, table)
+	case "table.rename":
+		return m.openRenameTableForm(schema, table)
+	case "table.addcolumn":
+		return m.openAddColumnForm(schema, table)
+	case "table.dropcolumn":
+		return m.editInfoCmd(schema, table, "dropcolumnmenu")
+	case "table.createindex":
+		return m.openCreateIndexForm(schema, table)
+	case "table.dropindex":
+		return m.openDropIndexMenu(schema, table)
 	}
 	return nil
 }
@@ -2307,6 +2453,7 @@ func (m *Model) closeOverlays() {
 	m.cellEdit.Close()
 	m.confirm.Close()
 	m.dirInput.Close()
+	m.form.Close()
 	m.completion.Close()
 	m.showHelp = false
 	m.pendingCmd = nil

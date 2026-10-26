@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/LinduanTof/b-db/internal/i18n"
@@ -123,5 +124,48 @@ func TestWordAtLineStart(t *testing.T) {
 	word, n := m.WordBeforeCursor()
 	if word != "select" || n != 6 {
 		t.Fatalf("word = %q, n = %d", word, n)
+	}
+}
+
+func TestFindCyclesMatches(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 8)
+	m.SetValue("select id from users\nselect name from users")
+	m.OpenFind()
+	for _, r := range "select" {
+		m, _ = m.UpdateFind(tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+	query, current, total := m.FindStatus()
+	if query != "select" || current != 1 || total != 2 {
+		t.Fatalf("find status = %q %d/%d, want select 1/2", query, current, total)
+	}
+	m, _ = m.UpdateFind(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if _, current, _ = m.FindStatus(); current != 2 {
+		t.Fatalf("current = %d, want 2", current)
+	}
+	m, _ = m.UpdateFind(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if _, current, _ = m.FindStatus(); current != 1 {
+		t.Fatalf("current = %d, want wrap to 1", current)
+	}
+	m, _ = m.UpdateFind(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.Finding() {
+		t.Fatal("esc should close the find prompt")
+	}
+}
+
+func TestFindNoMatchAndBackspace(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 8)
+	m.SetValue("select 1")
+	m.OpenFind()
+	for _, r := range "zzz" {
+		m, _ = m.UpdateFind(tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+	if _, _, total := m.FindStatus(); total != 0 {
+		t.Fatalf("total = %d, want 0", total)
+	}
+	m, _ = m.UpdateFind(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if query, _, _ := m.FindStatus(); query != "zz" {
+		t.Fatalf("query = %q, want zz", query)
 	}
 }

@@ -51,6 +51,41 @@ type Mutator interface {
 	PreviewDelete(table TableRef, key map[string]any) string
 }
 
+// Inserter is implemented by connections that can insert rows. It is separate
+// from Mutator because bulk import and the row form do not need a primary key.
+// InsertRows must be atomic: either every row is written or none is. It reads
+// rows from a RowSource so imports never buffer the whole file, and calls
+// onProgress every time a row is written when onProgress is not nil.
+type Inserter interface {
+	InsertRows(ctx context.Context, table TableRef, columns []string, rows RowSource, onProgress func(int64)) (int64, error)
+	PreviewInsert(table TableRef, columns []string, rows [][]any) string
+}
+
+// RowSource is a forward-only stream of values for InsertRows. Values must be
+// valid until the next call to Next.
+type RowSource interface {
+	Next() bool
+	Values() []any
+	Err() error
+}
+
+// SliceRows adapts an in-memory slice of rows to RowSource.
+type SliceRows struct {
+	rows  [][]any
+	index int
+}
+
+func NewSliceRows(rows [][]any) *SliceRows { return &SliceRows{rows: rows, index: -1} }
+
+func (s *SliceRows) Next() bool {
+	s.index++
+	return s.index < len(s.rows)
+}
+
+func (s *SliceRows) Values() []any { return s.rows[s.index] }
+
+func (s *SliceRows) Err() error { return nil }
+
 type Catalog interface {
 	Schemas(ctx context.Context) ([]string, error)
 	Tables(ctx context.Context, schema string) ([]Object, error)

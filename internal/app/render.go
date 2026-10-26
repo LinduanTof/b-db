@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -139,7 +140,7 @@ func (m *Model) renderMain() string {
 	if m.effectiveZoom() {
 		switch m.focus {
 		case focusEditor:
-			body = renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.width)+"\n"+m.editor.View(), m.width, mainH)
+			body = renderPane(m.t.T(i18n.KeyPaneSQL), m.editorHint(), m.tabBar(m.width)+"\n"+m.editor.View(), m.width, mainH)
 		case focusResults:
 			body = renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.width, mainH)
 		default:
@@ -150,16 +151,16 @@ func (m *Model) renderMain() string {
 		separator := strings.Repeat("│\n", mainH-1) + "│"
 		switch {
 		case m.columnsActive:
-			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.editorW)+"\n"+m.editor.View(), m.editorW, mainH)
+			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.editorHint(), m.tabBar(m.editorW)+"\n"+m.editor.View(), m.editorW, mainH)
 			resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.resultsW, mainH)
 			body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, editorView, separator, resultsView)
 		case m.layoutMode == config.LayoutResultsTop:
 			resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.rightW, m.resultsH)
-			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
+			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.editorHint(), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
 			right := lipgloss.JoinVertical(lipgloss.Top, resultsView, strings.Repeat("─", m.rightW), editorView)
 			body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
 		default:
-			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.t.T(i18n.KeyHintEditor), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
+			editorView := renderPane(m.t.T(i18n.KeyPaneSQL), m.editorHint(), m.tabBar(m.rightW)+"\n"+m.editor.View(), m.rightW, m.editorH)
 			resultsView := renderPane(m.resultsPaneTitle(), m.resultsPaneHint(), m.results.View(), m.rightW, m.resultsH)
 			right := lipgloss.JoinVertical(lipgloss.Top, editorView, strings.Repeat("─", m.rightW), resultsView)
 			body = lipgloss.JoinHorizontal(lipgloss.Top, side, separator, right)
@@ -204,6 +205,21 @@ func (m *Model) renderHelp() string {
 	return center(box, m.width, m.height)
 }
 
+func (m *Model) editorHint() string {
+	if !m.editor.Finding() {
+		return m.t.T(i18n.KeyHintEditor)
+	}
+	query, current, total := m.editor.FindStatus()
+	switch {
+	case query == "":
+		return m.t.T(i18n.KeyFindPrompt)
+	case total == 0:
+		return m.t.T(i18n.KeyFindPrompt) + query + "  " + m.t.T(i18n.KeyFindNoMatch)
+	default:
+		return fmt.Sprintf("%s%s  (%d/%d)", m.t.T(i18n.KeyFindPrompt), query, current, total)
+	}
+}
+
 func (m *Model) sidebarHint(width int) string {
 	title := m.t.T(i18n.KeyPaneConnections)
 	available := width - textutil.Width(title) - 7
@@ -227,11 +243,18 @@ func (m *Model) resultsPaneTitle() string {
 
 func (m *Model) resultsPaneHint() string {
 	switch m.context {
-	case contextInfo, contextTables:
-		if m.context == contextTables && m.filtering {
+	case contextInfo:
+		return m.t.T(i18n.KeyHintOverview)
+	case contextTables:
+		if m.filtering {
 			return m.t.T(i18n.KeyHintFilter) + m.filterInput.View()
 		}
 		return m.t.T(i18n.KeyHintOverview)
+	case contextData:
+		if m.filtering {
+			return m.t.T(i18n.KeyHintFilter) + m.filterInput.View()
+		}
+		return m.t.T(i18n.KeyHintResults)
 	default:
 		return m.t.T(i18n.KeyHintResults)
 	}
@@ -288,7 +311,7 @@ func (m *Model) statusRight() string {
 	switch {
 	case m.statusErr:
 		icon = "✗"
-	case m.running || m.exporting:
+	case m.running || m.exporting || m.importing:
 		icon = "…"
 	case m.status == m.t.T(i18n.KeyStatusReady):
 		icon = "✓"

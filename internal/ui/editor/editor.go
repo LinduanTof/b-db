@@ -28,6 +28,17 @@ type Model struct {
 
 	history []string
 	histPos int
+
+	findOpen    bool
+	findQuery   string
+	findMatches []findMatch
+	findCurrent int
+}
+
+type findMatch struct {
+	line   int
+	start  int
+	length int
 }
 
 func New(t *i18n.Translator) Model {
@@ -151,26 +162,43 @@ func (m *Model) renderLine(tokens []token, lineIndex, cursorLine, cursorCol, gut
 	var b strings.Builder
 	b.WriteString(theme.Muted.Render(fmt.Sprintf("%*d ", gutter-1, lineIndex+1)))
 
+	var seg strings.Builder
+	segKind := tokPlain
+	segOverride := -1
+	flush := func() {
+		if seg.Len() == 0 {
+			return
+		}
+		style := styleFor(segKind)
+		switch segOverride {
+		case 1:
+			style = theme.Selected
+		case 2, 3:
+			style = theme.CellCursor
+		}
+		b.WriteString(style.Render(seg.String()))
+		seg.Reset()
+	}
+
 	runeOffset := 0
 	cursorPlaced := false
 	for _, tok := range tokens {
-		style := styleFor(tok.kind)
-		tokRunes := []rune(tok.text)
-		if showCursor && lineIndex == cursorLine && cursorCol >= runeOffset && cursorCol < runeOffset+len(tokRunes) {
-			index := cursorCol - runeOffset
-			if index > 0 {
-				b.WriteString(style.Render(string(tokRunes[:index])))
+		for _, r := range tok.text {
+			override := m.matchOverride(lineIndex, runeOffset)
+			if showCursor && lineIndex == cursorLine && runeOffset == cursorCol {
+				override = 3
+				cursorPlaced = true
 			}
-			b.WriteString(theme.CellCursor.Render(string(tokRunes[index])))
-			if index+1 < len(tokRunes) {
-				b.WriteString(style.Render(string(tokRunes[index+1:])))
+			if override != segOverride || tok.kind != segKind {
+				flush()
+				segKind = tok.kind
+				segOverride = override
 			}
-			cursorPlaced = true
-		} else {
-			b.WriteString(style.Render(tok.text))
+			seg.WriteRune(r)
+			runeOffset++
 		}
-		runeOffset += len(tokRunes)
 	}
+	flush()
 	if showCursor && lineIndex == cursorLine && !cursorPlaced {
 		b.WriteString(theme.CellCursor.Render(" "))
 	}
@@ -223,6 +251,147 @@ func (m *Model) BrowseHistory(previous bool) {
 		}
 	}
 	m.SetValue(m.history[m.histPos])
+}
+
+// OpenFind starts an incremental search over the current value. Matches are
+// highlighted while the query is typed.
+func (m *Model) OpenFind() {
+	m.findOpen = true
+	m.findQuery = ""
+	m.findMatches = nil
+	m.findCurrent = 0
+}
+
+func (m *Model) CloseFind() {
+	m.findOpen = false
+	m.findQuery = ""
+	m.findMatches = nil
+	m.findCurrent = 0
+}
+
+func (m Model) Finding() bool { return m.findOpen }
+
+// FindStatus reports the query and the one-based position of the current
+// match, for the editor pane hint.
+func (m Model) FindStatus() (string, int, int) {
+	if len(m.findMatches) == 0 {
+		return m.findQuery, 0, 0
+	}
+	return m.findQuery, m.findCurrent + 1, len(m.findMatches)
+}
+
+// UpdateFind handles keys while the find prompt is open. It deliberately does
+// not forward anything to the textarea.
+func (m Model) UpdateFind(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if !m.findOpen {
+		return m, nil
+	}
+	switch msg.String() {
+	case "esc":
+		m.CloseFind()
+	case "enter", "down":
+		m.nextMatch(1)
+	case "shift+enter", "up":
+		m.nextMatch(-1)
+	case "backspace":
+		runes := []rune(m.findQuery)
+		if len(runes) > 0 {
+			m.findQuery = string(runes[:len(runes)-1])
+		}
+		m.refreshFind()
+	case "ctrl+u":
+		m.findQuery = ""
+		m.refreshFind()
+	default:
+		if msg.Text != "" {
+			m.findQuery += msg.Text
+			m.refreshFind()
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) refreshFind() {
+	m.findMatches = nil
+	m.findCurrent = 0
+	if m.findQuery == "" {
+		return
+	}
+	needle := []rune(m.findQuery)
+	for lineIndex, line := range strings.Split(m.ta.Value(), "\n") {
+		runes := []rune(line)
+		for start := 0; start+len(needle) <= len(runes); start++ {
+			if equalFoldRunes(runes[start:start+len(needle)], needle) {
+				m.findMatches = append(m.findMatches, findMatch{line: lineIndex, start: start, length: len(needle)})
+			}
+		}
+	}
+	if len(m.findMatches) > 0 {
+		m.jumpToMatch(0)
+	}
+}
+
+func equalFoldRunes(a, b []rune) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !strings.EqualFold(string(a[i]), string(b[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *Model) nextMatch(delta int) {
+	if len(m.findMatches) == 0 {
+		return
+	}
+	m.jumpToMatch(m.findCurrent + delta)
+}
+
+func (m *Model) jumpToMatch(index int) {
+	if len(m.findMatches) == 0 {
+		return
+	}
+	count := len(m.findMatches)
+	m.findCurrent = ((index % count) + count) % count
+	match := m.findMatches[m.findCurrent]
+	line := m.ta.Line()
+	for line < match.line {
+		m.ta.CursorDown()
+		next := m.ta.Line()
+		if next == line {
+			break
+		}
+		line = next
+	}
+	for line > match.line {
+		m.ta.CursorUp()
+		next := m.ta.Line()
+		if next == line {
+			break
+		}
+		line = next
+	}
+	m.ta.SetCursorColumn(match.start)
+}
+
+// matchOverride reports how a character should be styled: 1 for a match and 2
+// for the current match.
+func (m *Model) matchOverride(line, col int) int {
+	if !m.findOpen || len(m.findMatches) == 0 {
+		return 0
+	}
+	for i, match := range m.findMatches {
+		if match.line == line && col >= match.start && col < match.start+match.length {
+			if i == m.findCurrent {
+				return 2
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 type tokenKind int

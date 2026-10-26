@@ -1,0 +1,312 @@
+package app
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/LinduanTof/b-db/internal/db"
+)
+
+func queryInt(t *testing.T, m *Model, stmt string) int64 {
+	t.Helper()
+	rs, err := m.conn.Querier().Query(context.Background(), stmt, 1)
+	if err != nil {
+		t.Fatalf("query %q: %v", stmt, err)
+	}
+	if rs == nil || len(rs.Rows) == 0 || len(rs.Rows[0]) == 0 {
+		t.Fatalf("query %q returned no rows", stmt)
+	}
+	value, ok := rs.Rows[0][0].(int64)
+	if !ok {
+		t.Fatalf("query %q returned %T", stmt, rs.Rows[0][0])
+	}
+	return value
+}
+
+func TestInsertRowForm(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "rowform"))
+	if !m.form.IsOpen() {
+		t.Fatalf("insert form should open: %s", m.status)
+	}
+	if len(m.formColumns) == 0 {
+		t.Fatal("form columns were not loaded")
+	}
+	values := make([]string, len(m.formColumns))
+	for i, column := range m.formColumns {
+		switch column.Name {
+		case "name":
+			values[i] = "New User"
+		case "email":
+			values[i] = "new@example.com"
+		case "note":
+			values[i] = "hello"
+		}
+	}
+	m.submitInsertRow(values)
+	if !m.confirm.IsOpen() {
+		t.Fatalf("insert should ask for confirmation: %s", m.status)
+	}
+	if preview := ansi.Strip(m.confirm.View()); !strings.Contains(preview, "INSERT INTO") {
+		t.Fatalf("confirm preview should show the INSERT:\n%s", preview)
+	}
+	m = runCmd(t, m, m.pendingCmd)
+	m.pendingCmd = nil
+
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM users WHERE email = 'new@example.com'"); got != 1 {
+		t.Fatalf("inserted rows = %d, want 1 (status: %s)", got, m.status)
+	}
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM users WHERE email = 'new@example.com' AND note = 'hello'"); got != 1 {
+		t.Fatalf("note value was not inserted (status: %s)", m.status)
+	}
+}
+
+func TestInsertRowRejectsMissingRequiredColumn(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "rowform"))
+	m.submitInsertRow(make([]string, len(m.formColumns)))
+	if m.confirm.IsOpen() {
+		t.Fatal("missing required columns must not open the confirm dialog")
+	}
+	if !m.form.IsOpen() {
+		t.Fatal("the form should stay open with an error")
+	}
+	if !strings.Contains(ansi.Strip(m.form.View()), "required") {
+		t.Fatalf("expected a required-field error:\n%s", ansi.Strip(m.form.View()))
+	}
+}
+
+func TestImportCSVFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	path := filepath.Join(t.TempDir(), "users.csv")
+	if err := os.WriteFile(path, []byte("name,email,active\nImport One,one@example.com,1\nImport Two,two@example.com,0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "import"))
+	if !m.form.IsOpen() {
+		t.Fatalf("import form should open: %s", m.status)
+	}
+	cmd := m.submitImportForm([]string{path, "", ""}, []int{0, 0, 0})
+	m = runCmd(t, m, cmd)
+	if !m.confirm.IsOpen() {
+		t.Fatalf("import should ask for confirmation: %s", m.status)
+	}
+	if preview := ansi.Strip(m.confirm.View()); !strings.Contains(preview, "one@example.com") {
+		t.Fatalf("confirm preview should show the rows:\n%s", preview)
+	}
+	m = runCmd(t, m, m.pendingCmd)
+	m.pendingCmd = nil
+
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM users WHERE email IN ('one@example.com', 'two@example.com')"); got != 2 {
+		t.Fatalf("imported rows = %d, want 2 (status: %s)", got, m.status)
+	}
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM users WHERE email = 'two@example.com' AND active = 0"); got != 1 {
+		t.Fatalf("active value was not converted (status: %s)", m.status)
+	}
+}
+
+func TestImportRejectsUnknownColumn(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	path := filepath.Join(t.TempDir(), "bad.csv")
+	if err := os.WriteFile(path, []byte("name,nope\nalice,x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "import"))
+	cmd := m.submitImportForm([]string{path, "", ""}, []int{0, 0, 0})
+	m = runCmd(t, m, cmd)
+	if m.confirm.IsOpen() {
+		t.Fatal("unknown columns must not open the confirm dialog")
+	}
+	if !strings.Contains(m.status, "nope") {
+		t.Fatalf("status should name the unknown column: %s", m.status)
+	}
+}
+
+func TestDropTableFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	if _, err := m.conn.Querier().Exec(context.Background(), "CREATE TABLE tmp_drop (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	m.confirmDropTable("main", "tmp_drop")
+	if !m.confirm.IsOpen() {
+		t.Fatalf("drop should ask for confirmation: %s", m.status)
+	}
+	if preview := ansi.Strip(m.confirm.View()); !strings.Contains(preview, "DROP TABLE") {
+		t.Fatalf("confirm preview should show the DDL:\n%s", preview)
+	}
+	m = runCmd(t, m, m.pendingCmd)
+	m.pendingCmd = nil
+
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tmp_drop'"); got != 0 {
+		t.Fatalf("table still exists after drop (status: %s)", m.status)
+	}
+}
+
+func TestTruncateTableFlow(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.confirmTruncateTable("main", "orders")
+	if !m.confirm.IsOpen() {
+		t.Fatalf("truncate should ask for confirmation: %s", m.status)
+	}
+	m = runCmd(t, m, m.pendingCmd)
+	m.pendingCmd = nil
+
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM orders"); got != 0 {
+		t.Fatalf("orders rows = %d, want 0 (status: %s)", got, m.status)
+	}
+}
+
+func TestRenameTableForm(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.openRenameTableForm("main", "orders")
+	if !m.form.IsOpen() {
+		t.Fatalf("rename form should open: %s", m.status)
+	}
+	m.submitRenameTable([]string{"orders_renamed"})
+	if !m.confirm.IsOpen() {
+		t.Fatalf("rename should ask for confirmation: %s", m.status)
+	}
+	if preview := ansi.Strip(m.confirm.View()); !strings.Contains(preview, "RENAME TO") {
+		t.Fatalf("confirm preview should show the DDL:\n%s", preview)
+	}
+	m = runCmd(t, m, m.pendingCmd)
+	m.pendingCmd = nil
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'orders_renamed'"); got != 1 {
+		t.Fatalf("renamed table missing (status: %s)", m.status)
+	}
+}
+
+func TestCreateIndexForm(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.openCreateIndexForm("main", "orders")
+	m.submitCreateIndex([]string{"idx_orders_amount", "amount", ""}, []int{0, 0, 1})
+	if !m.confirm.IsOpen() {
+		t.Fatalf("create index should ask for confirmation: %s", m.status)
+	}
+	m = runCmd(t, m, m.pendingCmd)
+	m.pendingCmd = nil
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_orders_amount'"); got != 1 {
+		t.Fatalf("index missing (status: %s)", m.status)
+	}
+}
+
+func TestSchemaChangeRejectedReadOnly(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+	m.cfg.Connections[0].ReadOnly = true
+
+	m.confirmDropTable("main", "orders")
+	if m.confirm.IsOpen() {
+		t.Fatal("read-only connections must not open the confirm dialog")
+	}
+	if got := queryInt(t, m, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'orders'"); got != 1 {
+		t.Fatal("the table must remain")
+	}
+}
+
+func TestResultFilterKeys(t *testing.T) {
+	m := testModel(t, "en")
+	m.results.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "name"}},
+		Rows:    [][]any{{"alice"}, {"bob"}, {"alicia"}},
+	})
+	m.context = contextData
+	m.focus = focusResults
+
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "/", Code: '/'})
+	if !m.filtering {
+		t.Fatal("slash should start filtering results")
+	}
+	for _, r := range "ali" {
+		m = sendKey(t, m, tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+	if rs := m.results.OrderedResult(); len(rs.Rows) != 2 {
+		t.Fatalf("filtered rows = %d, want 2", len(rs.Rows))
+	}
+	if !strings.Contains(ansi.Strip(m.results.View()), "2/3") {
+		t.Fatalf("filter count missing from the results footer:\n%s", ansi.Strip(m.results.View()))
+	}
+
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.filtering {
+		t.Fatal("esc should stop filtering")
+	}
+	if rs := m.results.OrderedResult(); len(rs.Rows) != 3 {
+		t.Fatalf("filter should be cleared, rows = %d", len(rs.Rows))
+	}
+}
+
+func TestExplainQuery(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.editor.SetValue("SELECT * FROM users")
+	m.focus = focusEditor
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'e', Mod: tea.ModAlt})
+	rs := m.results.Result()
+	if rs == nil {
+		t.Fatalf("explain returned no result: %s", m.status)
+	}
+	if len(rs.Rows) == 0 {
+		t.Fatalf("explain returned no rows: %s", m.status)
+	}
+	if m.context != contextQuery {
+		t.Fatalf("context = %v, want query", m.context)
+	}
+}
+
+func TestEditorFindKeys(t *testing.T) {
+	m := testModel(t, "en")
+	m.focus = focusEditor
+	m.editor.SetValue("select 1\nselect 2")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	if !m.editor.Finding() {
+		t.Fatal("ctrl+f should open the find prompt")
+	}
+	for _, r := range "select" {
+		m = sendKey(t, m, tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+	if _, current, total := m.editor.FindStatus(); current != 1 || total != 2 {
+		t.Fatalf("find status = %d/%d, want 1/2", current, total)
+	}
+	if hint := ansi.Strip(m.View().Content); !strings.Contains(hint, "Find: select") {
+		t.Fatalf("find prompt missing from the editor hint:\n%s", hint)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.editor.Finding() {
+		t.Fatal("esc should close the find prompt")
+	}
+}
