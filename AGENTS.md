@@ -129,4 +129,5 @@ func (m *Model) View() string
 - `make release` 不会注入版本号;goreleaser 通过 `-X main.version={{.Version}}` 注入。Makefile 构建的二进制版本显示为 `dev`。
 - 根 `Model.Update` 对许多消息会提前返回;新增需要响应尺寸或焦点变化的状态时,还要同步修改 `layout()`/窗口尺寸分支。
 - 异步处理器必须检查 `querySeq`/消息 id;取消和超时错误需先用 `errors.Is` 判断,再显示通用失败信息。
+- 编辑器自绘渲染基于视觉行(`editor.visualRows`):长行按面板宽度软换行,鼠标点击命中、滚轮滚动、光标定位与查找高亮都按视觉行映射。`lastCursorRow` 用来区分"光标移动"与"滚轮":只有光标行变化时 View 才跟随,否则滚轮后的视口会被光标拉回。
 - 结果列宽基于展示字符串;排序和单元格编辑基于原始值,但未知数值类型会回退为字符串比较;导出会遵循当前客户端排序与过滤。

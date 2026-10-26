@@ -283,7 +283,11 @@ func (m *Model) insertTemplate(schema, table string, columns []db.Column) tea.Cm
 		names = append(names, column.Name)
 		values = append(values, "NULL")
 	}
-	stmt := fmt.Sprintf(m.t.T(i18n.KeyQueryInsertTemplate), qualifiedTable(schema, table), strings.Join(names, ", "), strings.Join(values, ", "))
+	stmt := fmt.Sprintf(m.t.T(i18n.KeyQueryInsertTemplate),
+		qualifiedTable(schema, table),
+		strings.Join(names, ",\n  "),
+		strings.Join(values, ",\n  "),
+	)
 	m.editor.SetValue(stmt)
 	m.focus = focusEditor
 	m.layout()

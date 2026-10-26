@@ -178,7 +178,7 @@ var en = map[string]string{
 	KeyStatusUpdated:           "1 row updated",
 	KeyStatusDeleted:           "1 row deleted",
 	KeyMenuInsert:              "Insert row template",
-	KeyQueryInsertTemplate:     "INSERT INTO %s (%s) VALUES (%s);",
+	KeyQueryInsertTemplate:     "INSERT INTO %s (\n  %s\n) VALUES (\n  %s\n);",
 
 	KeyHelpTitle:       "Keyboard shortcuts",
 	KeyHelpGlobal:      "Global",
@@ -459,7 +459,7 @@ var zh = map[string]string{
 	KeyStatusUpdated:           "已更新 1 行",
 	KeyStatusDeleted:           "已删除 1 行",
 	KeyMenuInsert:              "插入行模板",
-	KeyQueryInsertTemplate:     "INSERT INTO %s (%s) VALUES (%s);",
+	KeyQueryInsertTemplate:     "INSERT INTO %s (\n  %s\n) VALUES (\n  %s\n);",
 
 	KeyHelpTitle:       "键盘快捷键",
 	KeyHelpGlobal:      "全局",

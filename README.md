@@ -238,9 +238,9 @@ Press `a` in the sidebar or results pane, or choose "Add data source" in the opt
 - Click a sidebar node to connect, expand or activate it
 - With a menu open: the first click selects, a second click on the selected item performs the action or changes the setting; clicking a tab switches Actions/Settings, the wheel moves the selection, clicking outside closes the menu
 - Table nodes: a single click selects, a double click opens the table (new or reused tab with paged data); use `m` for the node actions menu
-- Click the editor or results pane to focus it
+- Click the editor to focus it and place the cursor, including on wrapped lines
 - Click a result cell to select it
-- The wheel scrolls the sidebar, results grid and DDL/index viewers
+- The wheel scrolls the sidebar, editor, results grid and DDL/index viewers
 
 ## Sidebar session state
 
@@ -383,7 +383,7 @@ DDL and index viewers scroll with `↑`/`↓`, `PgUp`/`PgDn`, `g`/`G` and close 
 
 ## SQL editor
 
-The editor colors SQL using the current theme: keywords, functions, strings, numbers and comments each get their own color. It supports multi-line editing, line numbers, `Ctrl+Space` completion, query history, incremental find (`Ctrl+F`) and query plans.
+The editor colors SQL using the current theme: keywords, functions, strings, numbers and comments each get their own color. It supports multi-line editing, line numbers, `Ctrl+Space` completion, query history, incremental find (`Ctrl+F`) and query plans. Long lines wrap at the pane width instead of being truncated; continuation rows keep the line-number gutter aligned.
 
 - `Ctrl+F` opens the find prompt in the editor's hint line; matches are highlighted as you type, `Enter`/`↓` and `Shift+Enter`/`↑` cycle through them and `Esc` closes the prompt
 - `Alt+E` runs the first statement in the editor through `EXPLAIN (FORMAT TEXT)` on PostgreSQL, `EXPLAIN` on MySQL and `EXPLAIN QUERY PLAN` on SQLite. It never uses `ANALYZE`, so write statements are not executed

@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/LinduanTof/b-db/internal/complete"
 	"github.com/LinduanTof/b-db/internal/i18n"
@@ -29,6 +30,8 @@ type Model struct {
 	history []string
 	histPos int
 
+	lastCursorRow int
+
 	findOpen    bool
 	findQuery   string
 	findMatches []findMatch
@@ -47,13 +50,14 @@ func New(t *i18n.Translator) Model {
 	ta.Placeholder = "SELECT * FROM ..."
 	ta.ShowLineNumbers = true
 	ta.CharLimit = 0
-	return Model{t: t, ta: ta}
+	return Model{t: t, ta: ta, lastCursorRow: -1}
 }
 
 func (m *Model) SetSize(width, height int) {
 	m.width, m.height = width, height
 	m.ta.SetWidth(max(width, 1))
 	m.ta.SetHeight(max(height, 1))
+	m.lastCursorRow = -1
 }
 
 func (m *Model) Focus() tea.Cmd { return m.ta.Focus() }
@@ -66,6 +70,7 @@ func (m *Model) SetValue(s string) {
 	m.ta.SetValue(s)
 	m.ta.CursorEnd()
 	m.scrollRow = 0
+	m.lastCursorRow = -1
 }
 
 func (m Model) WordBeforeCursor() (string, int) {
@@ -97,6 +102,13 @@ func isWordRune(r rune) bool {
 	return r == '_' || r == '.' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
+// visualRow is one screen line inside a logical line. Long lines are wrapped
+// at the editor width so values never run past the pane border.
+type visualRow struct {
+	line       int
+	start, end int
+}
+
 func (m *Model) View() string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
@@ -115,38 +127,165 @@ func (m *Model) View() string {
 	if cursorLine >= len(lines) {
 		cursorLine = len(lines) - 1
 	}
-	if cursorLine < m.scrollRow {
-		m.scrollRow = cursorLine
-	}
-	if cursorLine >= m.scrollRow+m.height {
-		m.scrollRow = cursorLine - m.height + 1
-	}
-	if m.scrollRow < 0 {
-		m.scrollRow = 0
-	}
 
 	gutter := len(strconv.Itoa(max(1, len(lines)))) + 1
+	rows := visualRows(lines, max(1, m.width-gutter))
+	cursorRow := visualIndexFor(rows, cursorLine, cursorCol)
+
+	// Follow the cursor only when it moves. Mouse-wheel scrolling changes
+	// scrollRow without touching the cursor, so the view must stay put.
+	if cursorRow != m.lastCursorRow {
+		if cursorRow < m.scrollRow {
+			m.scrollRow = cursorRow
+		}
+		if cursorRow >= m.scrollRow+m.height {
+			m.scrollRow = cursorRow - m.height + 1
+		}
+		m.lastCursorRow = cursorRow
+	}
+	m.scrollRow = min(max(m.scrollRow, 0), max(0, len(rows)-m.height))
+
 	showCursor := m.ta.Focused()
 	out := make([]string, 0, m.height)
-	inBlock := false
-	for i, line := range lines {
-		tokens := tokenizeLine(line, &inBlock)
-		if i < m.scrollRow {
-			continue
+	if value == "" {
+		out = append(out, m.placeholderLine(gutter, showCursor))
+	} else {
+		inBlock := false
+		tokens := make([][]token, len(lines))
+		for i, line := range lines {
+			tokens[i] = tokenizeLine(line, &inBlock)
 		}
-		if len(out) >= m.height {
-			break
+		for i := m.scrollRow; i < len(rows) && len(out) < m.height; i++ {
+			row := rows[i]
+			prefix := strings.Repeat(" ", gutter)
+			if row.start == 0 {
+				prefix = theme.Muted.Render(fmt.Sprintf("%*d ", gutter-1, row.line+1))
+			}
+			out = append(out, m.renderSegment(tokens[row.line], row, prefix,
+				cursorLine, cursorCol, showCursor && i == cursorRow))
 		}
-		if value == "" {
-			out = append(out, m.placeholderLine(gutter, showCursor))
-			continue
-		}
-		out = append(out, m.renderLine(tokens, i, cursorLine, cursorCol, gutter, showCursor))
 	}
 	for len(out) < m.height {
 		out = append(out, "")
 	}
 	return textutil.FitLines(strings.Join(out, "\n"), m.width, m.height)
+}
+
+func visualRows(lines []string, width int) []visualRow {
+	rows := make([]visualRow, 0, len(lines))
+	for i, line := range lines {
+		runes := []rune(line)
+		if len(runes) == 0 {
+			rows = append(rows, visualRow{line: i})
+			continue
+		}
+		start, used := 0, 0
+		for j, r := range runes {
+			w := runewidth.RuneWidth(r)
+			if used+w > width && j > start {
+				rows = append(rows, visualRow{line: i, start: start, end: j})
+				start = j
+				used = 0
+			}
+			used += w
+		}
+		rows = append(rows, visualRow{line: i, start: start, end: len(runes)})
+	}
+	return rows
+}
+
+// visualIndexFor maps a cursor position to the screen line that holds it.
+// A column at a wrap boundary belongs to the following row; a column at the
+// end of the logical line belongs to the last row of that line.
+func visualIndexFor(rows []visualRow, line, col int) int {
+	last := 0
+	for i, row := range rows {
+		if row.line != line {
+			continue
+		}
+		last = i
+		if col >= row.start && col < row.end {
+			return i
+		}
+	}
+	return last
+}
+
+// HandleClick moves the cursor to a screen position inside the editor body.
+// x is relative to the pane's left edge and y to the top of View.
+func (m *Model) HandleClick(x, y int) bool {
+	if m.width <= 0 || m.height <= 0 || y < 0 {
+		return false
+	}
+	value := m.ta.Value()
+	lines := strings.Split(value, "\n")
+	if value == "" {
+		lines = []string{""}
+	}
+	gutter := len(strconv.Itoa(max(1, len(lines)))) + 1
+	rows := visualRows(lines, max(1, m.width-gutter))
+	index := m.scrollRow + y
+	if index < 0 || index >= len(rows) {
+		return false
+	}
+	row := rows[index]
+	col := row.start
+	if x > gutter {
+		textCol := x - gutter
+		runes := []rune(lines[row.line])
+		used := 0
+		for col < row.end {
+			w := runewidth.RuneWidth(runes[col])
+			if used+w > textCol {
+				break
+			}
+			used += w
+			col++
+		}
+	}
+	m.setCursor(row.line, col)
+	m.lastCursorRow = -1
+	return true
+}
+
+// Scroll moves the viewport without moving the cursor.
+func (m *Model) Scroll(delta int) {
+	if m.width <= 0 || m.height <= 0 || delta == 0 {
+		return
+	}
+	value := m.ta.Value()
+	lines := strings.Split(value, "\n")
+	if value == "" {
+		lines = []string{""}
+	}
+	gutter := len(strconv.Itoa(max(1, len(lines)))) + 1
+	rows := visualRows(lines, max(1, m.width-gutter))
+	// Record where the cursor is so the next View keeps this scroll offset
+	// instead of snapping back before the first render.
+	m.lastCursorRow = visualIndexFor(rows, m.ta.Line(), m.ta.Column())
+	maxScroll := max(0, len(rows)-m.height)
+	m.scrollRow = min(max(m.scrollRow+delta*3, 0), maxScroll)
+}
+
+func (m *Model) setCursor(line, col int) {
+	current := m.ta.Line()
+	for current < line {
+		m.ta.CursorDown()
+		next := m.ta.Line()
+		if next == current {
+			break
+		}
+		current = next
+	}
+	for current > line {
+		m.ta.CursorUp()
+		next := m.ta.Line()
+		if next == current {
+			break
+		}
+		current = next
+	}
+	m.ta.SetCursorColumn(col)
 }
 
 func (m *Model) placeholderLine(gutter int, showCursor bool) string {
@@ -158,9 +297,9 @@ func (m *Model) placeholderLine(gutter int, showCursor bool) string {
 	return textutil.FitLine(line, m.width)
 }
 
-func (m *Model) renderLine(tokens []token, lineIndex, cursorLine, cursorCol, gutter int, showCursor bool) string {
+func (m *Model) renderSegment(tokens []token, row visualRow, prefix string, cursorLine, cursorCol int, showCursor bool) string {
 	var b strings.Builder
-	b.WriteString(theme.Muted.Render(fmt.Sprintf("%*d ", gutter-1, lineIndex+1)))
+	b.WriteString(prefix)
 
 	var seg strings.Builder
 	segKind := tokPlain
@@ -180,12 +319,22 @@ func (m *Model) renderLine(tokens []token, lineIndex, cursorLine, cursorCol, gut
 		seg.Reset()
 	}
 
-	runeOffset := 0
+	offset := 0
 	cursorPlaced := false
 	for _, tok := range tokens {
+		if offset >= row.end {
+			break
+		}
 		for _, r := range tok.text {
-			override := m.matchOverride(lineIndex, runeOffset)
-			if showCursor && lineIndex == cursorLine && runeOffset == cursorCol {
+			if offset >= row.end {
+				break
+			}
+			if offset < row.start {
+				offset++
+				continue
+			}
+			override := m.matchOverride(row.line, offset)
+			if showCursor && row.line == cursorLine && offset == cursorCol {
 				override = 3
 				cursorPlaced = true
 			}
@@ -195,11 +344,11 @@ func (m *Model) renderLine(tokens []token, lineIndex, cursorLine, cursorCol, gut
 				segOverride = override
 			}
 			seg.WriteRune(r)
-			runeOffset++
+			offset++
 		}
 	}
 	flush()
-	if showCursor && lineIndex == cursorLine && !cursorPlaced {
+	if showCursor && !cursorPlaced {
 		b.WriteString(theme.CellCursor.Render(" "))
 	}
 	return textutil.FitLine(b.String(), m.width)

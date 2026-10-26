@@ -112,6 +112,9 @@ func (m *Model) render() string {
 	if m.dirInput.IsOpen() {
 		return textutil.Overlay(base, m.dirInput.View(), m.width, m.height)
 	}
+	if m.form.IsOpen() {
+		return textutil.Overlay(base, m.form.View(), m.width, m.height)
+	}
 	if m.textView.IsOpen() {
 		return m.textView.View()
 	}

@@ -600,6 +600,67 @@ func (m *Model) View() tea.View {
 	return v
 }
 
+type paneKind int
+
+const (
+	paneNone paneKind = iota
+	paneSidebar
+	paneEditor
+	paneResults
+)
+
+// paneAt maps a screen coordinate to the visible pane and returns the x/y
+// relative to that pane. Zoom, columns and results-top layouts are resolved
+// here so click and wheel handling always agree.
+func (m *Model) paneAt(x, y int) (paneKind, int, int) {
+	if y < 0 || y >= m.height-2 {
+		return paneNone, 0, 0
+	}
+	if m.effectiveZoom() {
+		switch m.focus {
+		case focusEditor:
+			return paneEditor, x, y
+		case focusResults:
+			return paneResults, x, y
+		default:
+			return paneSidebar, x, y
+		}
+	}
+	if x < m.sideW {
+		return paneSidebar, x, y
+	}
+	editorStart := m.sideW + 1
+	if x < editorStart || x >= editorStart+m.rightW {
+		return paneNone, 0, 0
+	}
+	relX := x - editorStart
+	if m.columnsActive {
+		switch {
+		case relX < m.editorW:
+			return paneEditor, relX, y
+		case relX >= m.editorW+1:
+			return paneResults, relX - m.editorW - 1, y
+		}
+		return paneNone, 0, 0
+	}
+	if m.layoutMode == config.LayoutResultsTop {
+		switch {
+		case y < m.resultsH:
+			return paneResults, relX, y
+		case y >= m.resultsH+1 && y < m.resultsH+1+m.editorH:
+			return paneEditor, relX, y - m.resultsH - 1
+		}
+		return paneNone, 0, 0
+	}
+	switch {
+	case y < m.editorH:
+		return paneEditor, relX, y
+	case y >= m.editorH+1 && y < m.editorH+1+m.resultsH:
+		return paneResults, relX, y - m.editorH - 1
+	}
+	return paneNone, 0, 0
+}
+
 func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	if msg.Button != tea.MouseLeft {
 		return nil
@@ -617,51 +678,31 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	if m.anyOverlayOpen() {
 		return nil
 	}
-	x, y := msg.X, msg.Y
-	if m.effectiveZoom() {
-		if y < 0 || y >= m.height-2 {
-			return nil
-		}
-		switch m.focus {
-		case focusEditor:
-			return m.editor.Focus()
-		case focusResults:
-			m.results.HandleClick(x, y-1)
-		default:
-			return m.sidebar.HandleClick(y - 1)
-		}
-		return nil
-	}
-	if x < m.sideW {
-		if y < 0 || y >= m.height-2 {
-			return nil
-		}
+
+	kind, relX, paneY := m.paneAt(msg.X, msg.Y)
+	switch kind {
+	case paneSidebar:
 		m.editor.Blur()
 		m.focus = focusSidebar
 		m.layout()
-		if y == 0 {
+		if paneY == 0 {
 			return nil
 		}
-		return m.sidebar.HandleClick(y - 1)
-	}
-
-	editorStart := m.sideW + 1
-	if x < editorStart || x >= editorStart+m.rightW {
-		return nil
-	}
-	relX := x - editorStart
-	switch {
-	case y >= 0 && y < m.editorH:
+		return m.sidebar.HandleClick(paneY - 1)
+	case paneEditor:
 		m.focus = focusEditor
 		m.layout()
+		// The editor body starts below the pane title and the tab bar.
+		if paneY >= 2 {
+			m.editor.HandleClick(relX, paneY-2)
+		}
 		return m.editor.Focus()
-	case y >= m.editorH+1 && y < m.editorH+1+m.resultsH:
+	case paneResults:
 		m.editor.Blur()
 		m.focus = focusResults
 		m.layout()
-		relY := y - (m.editorH + 2)
-		if relY >= 0 {
-			m.results.HandleClick(relX, relY)
+		if paneY >= 1 {
+			m.results.HandleClick(relX, paneY-1)
 		}
 	}
 	return nil
@@ -698,24 +739,13 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		return nil
 	}
 
-	if m.effectiveZoom() {
-		switch m.focus {
-		case focusResults:
-			m.results.Scroll(delta)
-		case focusSidebar:
-			m.sidebar.Scroll(delta)
-		}
-		return nil
-	}
-
-	x, y := msg.X, msg.Y
-	if x < m.sideW && y >= 0 && y < m.height-2 {
+	kind, _, _ := m.paneAt(msg.X, msg.Y)
+	switch kind {
+	case paneSidebar:
 		m.sidebar.Scroll(delta)
-		return nil
-	}
-	editorStart := m.sideW + 1
-	if x >= editorStart && x < editorStart+m.rightW &&
-		y >= m.editorH+2 && y < m.editorH+1+m.resultsH {
+	case paneEditor:
+		m.editor.Scroll(delta)
+	case paneResults:
 		m.results.Scroll(delta)
 	}
 	return nil

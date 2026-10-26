@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/LinduanTof/b-db/internal/config"
 	"github.com/LinduanTof/b-db/internal/db"
 )
 
@@ -308,5 +309,133 @@ func TestEditorFindKeys(t *testing.T) {
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.editor.Finding() {
 		t.Fatal("esc should close the find prompt")
+	}
+}
+
+func TestFormOverlayIsRendered(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.openCreateTableForm(m.connName)
+	if !m.form.IsOpen() {
+		t.Fatalf("form should open: %s", m.status)
+	}
+	content := ansi.Strip(m.View().Content)
+	// A form that is open but not rendered swallows every key press, which
+	// looks like a frozen UI.
+	if !strings.Contains(content, "Create table") {
+		t.Fatalf("open form is missing from the rendered view:\n%s", content)
+	}
+	if !strings.Contains(content, "Table") || !strings.Contains(content, "Columns") {
+		t.Fatalf("form fields are missing from the view:\n%s", content)
+	}
+}
+
+func TestFormOverlayCloses(t *testing.T) {
+	m := testModel(t, "en")
+	m.openCreateTableForm(m.connName)
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.form.IsOpen() {
+		t.Fatal("esc should close the form")
+	}
+	if strings.Contains(ansi.Strip(m.View().Content), "Columns") {
+		t.Fatal("form contents should disappear after closing")
+	}
+}
+
+func TestInsertTemplateIsMultiline(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "insert"))
+	value := m.editor.Value()
+	if !strings.Contains(value, "\n") {
+		t.Fatalf("insert template should be multiline: %q", value)
+	}
+	if !strings.Contains(value, "INSERT INTO") || !strings.Contains(value, "id,") {
+		t.Fatalf("unexpected template: %q", value)
+	}
+	if !strings.Contains(value, "\n  id,\n  name,") {
+		t.Fatalf("columns should each be on their own line: %q", value)
+	}
+	wantLines := 2*len(m.editCache[editInfoKey("main", "users")].columns) + 3
+	if got := len(strings.Split(value, "\n")); got != wantLines {
+		t.Fatalf("template lines = %d, want %d: %q", got, wantLines, value)
+	}
+	if !strings.Contains(ansi.Strip(m.editor.View()), "NULL") {
+		t.Fatalf("editor should render the template:\n%s", ansi.Strip(m.editor.View()))
+	}
+}
+
+func TestMouseClickEditorFocuses(t *testing.T) {
+	m := testModel(t, "en")
+	m.editor.SetValue("select 1\nselect 2")
+	m.focus = focusSidebar
+	m.layout()
+
+	x := m.sideW + 1 + 2
+	model, _ := m.Update(tea.MouseClickMsg{X: x, Y: 2, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.focus != focusEditor {
+		t.Fatalf("focus = %v, want editor", m.focus)
+	}
+	if strings.Contains(ansi.Strip(m.View().Content), "0/") {
+		t.Fatal("unexpected render")
+	}
+}
+
+func TestMouseClickColumnsLayout(t *testing.T) {
+	m := testModel(t, "en")
+	m.layoutMode = config.LayoutColumns
+	m.layout()
+	if !m.columnsActive {
+		t.Skip("terminal is not wide enough for columns")
+	}
+	x := m.sideW + 1 + m.editorW + 1 + 2
+	model, _ := m.Update(tea.MouseClickMsg{X: x, Y: 2, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.focus != focusResults {
+		t.Fatalf("focus = %v, want results", m.focus)
+	}
+
+	x = m.sideW + 1 + 2
+	model, _ = m.Update(tea.MouseClickMsg{X: x, Y: 2, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.focus != focusEditor {
+		t.Fatalf("focus = %v, want editor", m.focus)
+	}
+}
+
+func TestMouseClickResultsTopLayout(t *testing.T) {
+	m := testModel(t, "en")
+	m.layoutMode = config.LayoutResultsTop
+	m.layout()
+
+	x := m.sideW + 1 + 2
+	y := m.resultsH + 1 + 2
+	model, _ := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.focus != focusEditor {
+		t.Fatalf("focus = %v, want editor", m.focus)
+	}
+}
+
+func TestMouseWheelScrollsEditor(t *testing.T) {
+	m := testModel(t, "en")
+	m.editor.SetValue(strings.Repeat("line\n", 30))
+	m.focus = focusEditor
+	m.layout()
+	_ = m.View()
+	before := ansi.Strip(m.editor.View())
+
+	model, _ := m.Update(tea.MouseWheelMsg{X: m.sideW + 2, Y: 2, Button: tea.MouseWheelUp})
+	m = model.(*Model)
+	if m.focus != focusEditor {
+		t.Fatalf("wheel changed focus to %v", m.focus)
+	}
+	if after := ansi.Strip(m.editor.View()); after == before {
+		t.Fatal("wheel did not scroll the editor")
 	}
 }
