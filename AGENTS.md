@@ -129,5 +129,11 @@ func (m *Model) View() string
 - `make release` 不会注入版本号;goreleaser 通过 `-X main.version={{.Version}}` 注入。Makefile 构建的二进制版本显示为 `dev`。
 - 根 `Model.Update` 对许多消息会提前返回;新增需要响应尺寸或焦点变化的状态时,还要同步修改 `layout()`/窗口尺寸分支。
 - 异步处理器必须检查 `querySeq`/消息 id;取消和超时错误需先用 `errors.Is` 判断,再显示通用失败信息。
-- 编辑器自绘渲染基于视觉行(`editor.visualRows`):长行按面板宽度软换行,鼠标点击命中、滚轮滚动、光标定位与查找高亮都按视觉行映射。`lastCursorRow` 用来区分"光标移动"与"滚轮":只有光标行变化时 View 才跟随,否则滚轮后的视口会被光标拉回。
+- 编辑器自绘渲染基于视觉行:View 通过 `prepare` 维护行级缓存(每行 token、视觉行数与前缀和),只重算改动行;点击/滚动/查找用 `cacheStart` 前缀和定位。`lastCursorRow` 用来区分"光标移动"与"滚轮":只有光标行变化时 View 才跟随,否则滚轮后的视口会被光标拉回。`setCursor` 在移动期间临时放宽 textarea 宽度,否则软换行会让 `CursorDown` 按视觉行移动并提前结束。
+- 导入在预览确认框出现时只记录 `pendingImport`;用户确认后才创建 `importCmd` 并置 `importing`,取消或关闭浮层必须同时清空两者,否则 `importing` 会永久拦截 `Esc`。
+- `tea.PasteMsg` 必须经 `handlePaste` 路由到最上层输入组件(form/连接表单/单元格编辑/路径输入/查找),不能直接转发给 editor,否则会污染背后的 SQL。
+- 结果过滤同时支持 `contextData` 与 `contextQuery`;鼠标点击先结束过滤编辑但保留过滤条件,分页/排序刷新要在 `handleTablePageDone` 中重新应用过滤词。
+- DDL 成功后 `handleSchemaDone` 要清空 `editCache`、重置 pager 的 `metaLoaded/primary/totalKnown` 并刷新补全缓存;新增表结构写操作沿用该模式。
+- 非当前数据库节点上的 Create table 会先切换到目标会话再打开表单;视图(`Sub` 为 view/materialized view)的节点菜单不提供 insert/import/manage。
+- 方言化标识符必须走 `dialect.Quote`;`ddl.CreateIndex` 的列名不能用固定双引号(MySQL 下双引号是字符串字面量)。
 - 结果列宽基于展示字符串;排序和单元格编辑基于原始值,但未知数值类型会回退为字符串比较;导出会遵循当前客户端排序与过滤。

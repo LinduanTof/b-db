@@ -1,6 +1,7 @@
 package form
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -92,5 +93,32 @@ func TestFormErrorReopens(t *testing.T) {
 	}
 	if !strings.Contains(ansi.Strip(m.View()), "bad value") {
 		t.Fatal("error text missing from the view")
+	}
+}
+
+func TestFormScrollsFields(t *testing.T) {
+	fields := make([]Field, 40)
+	for i := range fields {
+		fields[i] = Field{Label: fmt.Sprintf("f%d", i)}
+	}
+	m := New(i18n.New("en"))
+	m.SetSize(80, 20)
+	m.Open("scroll", "Title", "", fields)
+	view := m.View()
+	if lines := len(strings.Split(view, "\n")); lines > 20 {
+		t.Fatalf("form is %d lines tall, want <= 20", lines)
+	}
+	if !strings.Contains(ansi.Strip(view), "f0") {
+		t.Fatalf("first field should be visible:\n%s", ansi.Strip(view))
+	}
+	for i := 0; i < len(fields)-1; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	}
+	view = ansi.Strip(m.View())
+	if !strings.Contains(view, "f39") {
+		t.Fatalf("focused field should be visible after scrolling:\n%s", view)
+	}
+	if strings.Contains(view, " f0 ") {
+		t.Fatalf("first field should have scrolled away:\n%s", view)
 	}
 }

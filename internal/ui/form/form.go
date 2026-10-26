@@ -4,6 +4,7 @@
 package form
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -84,6 +85,16 @@ func (m *Model) Open(id, title, note string, fields []Field) {
 }
 
 func (m *Model) Close() { m.open = false }
+
+// Paste forwards pasted text to the focused text field.
+func (m *Model) Paste(msg tea.PasteMsg) tea.Cmd {
+	if !m.open || len(m.fields) == 0 || len(m.fields[m.focus].Choices) > 0 {
+		return nil
+	}
+	var cmd tea.Cmd
+	m.inputs[m.focus], cmd = m.inputs[m.focus].Update(msg)
+	return cmd
+}
 
 func (m Model) IsOpen() bool { return m.open }
 
@@ -194,7 +205,22 @@ func (m *Model) View() string {
 	}
 
 	lines := []string{theme.Title.Render(" " + m.title), ""}
-	for i, f := range m.fields {
+	// Keep the focused field on screen; a large table can have more columns
+	// than the terminal is tall.
+	limit := max(1, m.height-13)
+	start := 0
+	if m.focus >= limit {
+		start = m.focus - limit + 1
+	}
+	if start > len(m.fields)-limit {
+		start = max(0, len(m.fields)-limit)
+	}
+	end := min(len(m.fields), start+limit)
+	if start > 0 {
+		lines = append(lines, theme.Muted.Render(" "+fmt.Sprintf(m.t.T(i18n.KeyFormMoreAbove), start)))
+	}
+	for i := start; i < end; i++ {
+		f := m.fields[i]
 		marker := "  "
 		labelStyle := lipgloss.NewStyle()
 		if i == m.focus {
@@ -210,6 +236,9 @@ func (m *Model) View() string {
 			value = m.inputs[i].View()
 		}
 		lines = append(lines, " "+marker+label+" "+value)
+	}
+	if end < len(m.fields) {
+		lines = append(lines, theme.Muted.Render(" "+fmt.Sprintf(m.t.T(i18n.KeyFormMoreBelow), len(m.fields)-end)))
 	}
 	if m.note != "" {
 		lines = append(lines, "", theme.Muted.Render(" "+textutil.FitLine(m.note, contentW)))

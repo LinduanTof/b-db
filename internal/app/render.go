@@ -253,7 +253,7 @@ func (m *Model) resultsPaneHint() string {
 			return m.t.T(i18n.KeyHintFilter) + m.filterInput.View()
 		}
 		return m.t.T(i18n.KeyHintOverview)
-	case contextData:
+	case contextData, contextQuery:
 		if m.filtering {
 			return m.t.T(i18n.KeyHintFilter) + m.filterInput.View()
 		}

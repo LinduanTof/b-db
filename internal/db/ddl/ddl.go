@@ -20,10 +20,10 @@ func dialectFor(typ string) dialect.Dialect {
 	}
 }
 
-func quoteList(values []string) string {
+func quoteList(d dialect.Dialect, values []string) string {
 	quoted := make([]string, len(values))
 	for i, value := range values {
-		quoted[i] = `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+		quoted[i] = d.Quote(value)
 	}
 	return strings.Join(quoted, ", ")
 }
@@ -78,7 +78,7 @@ func CreateIndex(typ, schema, table, name string, columns []string, unique bool)
 		prefix = "CREATE UNIQUE INDEX "
 	}
 	return prefix + d.Quote(name) + " ON " + d.Qualified(schema, table) +
-		" (" + quoteList(columns) + ");"
+		" (" + quoteList(d, columns) + ");"
 }
 
 func DropIndex(typ, schema, table, name string) string {

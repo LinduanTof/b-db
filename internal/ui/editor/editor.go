@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -31,6 +32,14 @@ type Model struct {
 	histPos int
 
 	lastCursorRow int
+
+	cacheValue  string
+	cacheWidth  int
+	cacheLines  []string
+	cacheTokens [][]token
+	cacheBlock  []bool
+	cacheRows   []int
+	cacheStart  []int
 
 	findOpen    bool
 	findQuery   string
@@ -115,10 +124,11 @@ func (m *Model) View() string {
 	}
 
 	value := m.ta.Value()
-	lines := strings.Split(value, "\n")
-	if value == "" {
-		lines = []string{""}
-	}
+	lineCount := strings.Count(value, "\n") + 1
+	gutter := len(strconv.Itoa(lineCount)) + 1
+	textWidth := max(1, m.width-gutter)
+	lines, tokens, starts := m.prepare(value, textWidth)
+
 	cursorLine := m.ta.Line()
 	cursorCol := m.ta.Column()
 	if cursorLine < 0 {
@@ -127,10 +137,9 @@ func (m *Model) View() string {
 	if cursorLine >= len(lines) {
 		cursorLine = len(lines) - 1
 	}
-
-	gutter := len(strconv.Itoa(max(1, len(lines)))) + 1
-	rows := visualRows(lines, max(1, m.width-gutter))
-	cursorRow := visualIndexFor(rows, cursorLine, cursorCol)
+	cursorSegment := segmentForCol([]rune(lines[cursorLine]), cursorCol, textWidth)
+	cursorRow := starts[cursorLine] + cursorSegment
+	total := starts[len(lines)]
 
 	// Follow the cursor only when it moves. Mouse-wheel scrolling changes
 	// scrollRow without touching the cursor, so the view must stay put.
@@ -143,26 +152,29 @@ func (m *Model) View() string {
 		}
 		m.lastCursorRow = cursorRow
 	}
-	m.scrollRow = min(max(m.scrollRow, 0), max(0, len(rows)-m.height))
+	m.scrollRow = min(max(m.scrollRow, 0), max(0, total-m.height))
 
 	showCursor := m.ta.Focused()
 	out := make([]string, 0, m.height)
 	if value == "" {
 		out = append(out, m.placeholderLine(gutter, showCursor))
 	} else {
-		inBlock := false
-		tokens := make([][]token, len(lines))
-		for i, line := range lines {
-			tokens[i] = tokenizeLine(line, &inBlock)
-		}
-		for i := m.scrollRow; i < len(rows) && len(out) < m.height; i++ {
-			row := rows[i]
-			prefix := strings.Repeat(" ", gutter)
-			if row.start == 0 {
-				prefix = theme.Muted.Render(fmt.Sprintf("%*d ", gutter-1, row.line+1))
+		line := lineIndexAt(starts, m.scrollRow)
+		segment := m.scrollRow - starts[line]
+		for line < len(lines) && len(out) < m.height {
+			bounds := segmentBoundsAll([]rune(lines[line]), textWidth)
+			for segment < len(bounds) && len(out) < m.height {
+				row := visualRow{line: line, start: bounds[segment][0], end: bounds[segment][1]}
+				prefix := strings.Repeat(" ", gutter)
+				if row.start == 0 {
+					prefix = theme.Muted.Render(fmt.Sprintf("%*d ", gutter-1, line+1))
+				}
+				out = append(out, m.renderSegment(tokens[line], row, prefix,
+					cursorLine, cursorCol, showCursor && line == cursorLine && segment == cursorSegment))
+				segment++
 			}
-			out = append(out, m.renderSegment(tokens[row.line], row, prefix,
-				cursorLine, cursorCol, showCursor && i == cursorRow))
+			line++
+			segment = 0
 		}
 	}
 	for len(out) < m.height {
@@ -171,27 +183,178 @@ func (m *Model) View() string {
 	return textutil.FitLines(strings.Join(out, "\n"), m.width, m.height)
 }
 
+// visualRowCount returns how many screen rows a logical line occupies.
+func visualRowCount(runes []rune, width int) int {
+	if len(runes) == 0 {
+		return 1
+	}
+	count, start, used := 1, 0, 0
+	for i, r := range runes {
+		w := runewidth.RuneWidth(r)
+		if used+w > width && i > start {
+			count++
+			start = i
+			used = 0
+		}
+		used += w
+	}
+	return count
+}
+
+// segmentBoundsAll splits a logical line into screen rows.
+func segmentBoundsAll(runes []rune, width int) [][2]int {
+	if len(runes) == 0 {
+		return [][2]int{{0, 0}}
+	}
+	out := make([][2]int, 0, 1)
+	start, used := 0, 0
+	for i, r := range runes {
+		w := runewidth.RuneWidth(r)
+		if used+w > width && i > start {
+			out = append(out, [2]int{start, i})
+			start = i
+			used = 0
+		}
+		used += w
+	}
+	return append(out, [2]int{start, len(runes)})
+}
+
+// segmentForCol returns the screen row that holds a rune column.
+func segmentForCol(runes []rune, col, width int) int {
+	if len(runes) == 0 {
+		return 0
+	}
+	segment, start, used := 0, 0, 0
+	for i, r := range runes {
+		w := runewidth.RuneWidth(r)
+		if used+w > width && i > start {
+			if col < i {
+				return segment
+			}
+			segment++
+			start = i
+			used = 0
+		}
+		used += w
+	}
+	return segment
+}
+
+// lineIndexAt finds the logical line that contains a visual row.
+func lineIndexAt(starts []int, row int) int {
+	if row <= 0 || len(starts) < 2 {
+		return 0
+	}
+	index := sort.Search(len(starts)-1, func(i int) bool { return starts[i+1] > row })
+	if index >= len(starts)-1 {
+		index = len(starts) - 2
+	}
+	return max(0, index)
+}
+
 func visualRows(lines []string, width int) []visualRow {
 	rows := make([]visualRow, 0, len(lines))
 	for i, line := range lines {
-		runes := []rune(line)
-		if len(runes) == 0 {
-			rows = append(rows, visualRow{line: i})
-			continue
+		for _, bound := range segmentBoundsAll([]rune(line), width) {
+			rows = append(rows, visualRow{line: i, start: bound[0], end: bound[1]})
 		}
-		start, used := 0, 0
-		for j, r := range runes {
-			w := runewidth.RuneWidth(r)
-			if used+w > width && j > start {
-				rows = append(rows, visualRow{line: i, start: start, end: j})
-				start = j
-				used = 0
-			}
-			used += w
-		}
-		rows = append(rows, visualRow{line: i, start: start, end: len(runes)})
 	}
 	return rows
+}
+
+// prepare returns the cached line layout. Only lines that changed are
+// re-tokenized and re-measured, so typing does not rescan the whole document.
+func (m *Model) prepare(value string, width int) ([]string, [][]token, []int) {
+	lines := strings.Split(value, "\n")
+	if value == "" {
+		lines = []string{""}
+	}
+	if m.cacheLines != nil && m.cacheValue == value && m.cacheWidth == width {
+		return m.cacheLines, m.cacheTokens, m.cacheStart
+	}
+
+	oldLines := m.cacheLines
+	oldTokens := m.cacheTokens
+	oldBlock := m.cacheBlock
+	oldRows := m.cacheRows
+	widthChanged := oldLines == nil || m.cacheWidth != width
+
+	prefix, suffix := 0, 0
+	if !widthChanged {
+		limit := min(len(oldLines), len(lines))
+		for prefix < limit && oldLines[prefix] == lines[prefix] {
+			prefix++
+		}
+		if prefix < len(lines) {
+			maxSuffix := min(len(lines)-prefix, len(oldLines)-prefix)
+			for suffix < maxSuffix &&
+				lines[len(lines)-1-suffix] == oldLines[len(oldLines)-1-suffix] {
+				suffix++
+			}
+		}
+	}
+
+	tokens := make([][]token, len(lines))
+	block := make([]bool, len(lines))
+	rowCounts := make([]int, len(lines))
+
+	for i := 0; i < prefix; i++ {
+		tokens[i] = oldTokens[i]
+		block[i] = oldBlock[i]
+	}
+	inBlock := prefix > 0 && block[prefix-1]
+	changedEnd := len(lines) - suffix
+	for i := prefix; i < changedEnd; i++ {
+		tokens[i] = tokenizeLine(lines[i], &inBlock)
+		block[i] = inBlock
+	}
+	if suffix > 0 {
+		oldStart := len(oldLines) - suffix
+		oldState := oldStart > 0 && oldBlock[oldStart-1]
+		if inBlock == oldState {
+			for i := 0; i < suffix; i++ {
+				tokens[changedEnd+i] = oldTokens[oldStart+i]
+				block[changedEnd+i] = oldBlock[oldStart+i]
+			}
+		} else {
+			for i := changedEnd; i < len(lines); i++ {
+				tokens[i] = tokenizeLine(lines[i], &inBlock)
+				block[i] = inBlock
+			}
+		}
+	}
+
+	if widthChanged {
+		for i, line := range lines {
+			rowCounts[i] = visualRowCount([]rune(line), width)
+		}
+	} else {
+		for i := 0; i < changedEnd; i++ {
+			if i < prefix {
+				rowCounts[i] = oldRows[i]
+			} else {
+				rowCounts[i] = visualRowCount([]rune(lines[i]), width)
+			}
+		}
+		oldStart := len(oldLines) - suffix
+		for i := 0; i < suffix; i++ {
+			rowCounts[changedEnd+i] = oldRows[oldStart+i]
+		}
+	}
+
+	starts := make([]int, len(lines)+1)
+	for i, count := range rowCounts {
+		starts[i+1] = starts[i] + count
+	}
+	m.cacheValue = value
+	m.cacheWidth = width
+	m.cacheLines = lines
+	m.cacheTokens = tokens
+	m.cacheBlock = block
+	m.cacheRows = rowCounts
+	m.cacheStart = starts
+	return lines, tokens, starts
 }
 
 // visualIndexFor maps a cursor position to the screen line that holds it.
@@ -218,23 +381,26 @@ func (m *Model) HandleClick(x, y int) bool {
 		return false
 	}
 	value := m.ta.Value()
-	lines := strings.Split(value, "\n")
-	if value == "" {
-		lines = []string{""}
-	}
-	gutter := len(strconv.Itoa(max(1, len(lines)))) + 1
-	rows := visualRows(lines, max(1, m.width-gutter))
+	lineCount := strings.Count(value, "\n") + 1
+	gutter := len(strconv.Itoa(lineCount)) + 1
+	textWidth := max(1, m.width-gutter)
+	lines, _, starts := m.prepare(value, textWidth)
+	total := starts[len(lines)]
 	index := m.scrollRow + y
-	if index < 0 || index >= len(rows) {
+	if index < 0 || index >= total {
 		return false
 	}
-	row := rows[index]
-	col := row.start
+	line := lineIndexAt(starts, index)
+	segment := index - starts[line]
+	runes := []rune(lines[line])
+	bounds := segmentBoundsAll(runes, textWidth)
+	segment = min(max(segment, 0), len(bounds)-1)
+	start, end := bounds[segment][0], bounds[segment][1]
+	col := start
 	if x > gutter {
 		textCol := x - gutter
-		runes := []rune(lines[row.line])
 		used := 0
-		for col < row.end {
+		for col < end {
 			w := runewidth.RuneWidth(runes[col])
 			if used+w > textCol {
 				break
@@ -243,7 +409,7 @@ func (m *Model) HandleClick(x, y int) bool {
 			col++
 		}
 	}
-	m.setCursor(row.line, col)
+	m.setCursor(line, col)
 	m.lastCursorRow = -1
 	return true
 }
@@ -254,25 +420,31 @@ func (m *Model) Scroll(delta int) {
 		return
 	}
 	value := m.ta.Value()
-	lines := strings.Split(value, "\n")
-	if value == "" {
-		lines = []string{""}
-	}
-	gutter := len(strconv.Itoa(max(1, len(lines)))) + 1
-	rows := visualRows(lines, max(1, m.width-gutter))
+	lineCount := strings.Count(value, "\n") + 1
+	gutter := len(strconv.Itoa(lineCount)) + 1
+	textWidth := max(1, m.width-gutter)
+	lines, _, starts := m.prepare(value, textWidth)
+	total := starts[len(lines)]
+	cursorLine := min(max(m.ta.Line(), 0), len(lines)-1)
 	// Record where the cursor is so the next View keeps this scroll offset
 	// instead of snapping back before the first render.
-	m.lastCursorRow = visualIndexFor(rows, m.ta.Line(), m.ta.Column())
-	maxScroll := max(0, len(rows)-m.height)
+	m.lastCursorRow = starts[cursorLine] +
+		segmentForCol([]rune(lines[cursorLine]), m.ta.Column(), textWidth)
+	maxScroll := max(0, total-m.height)
 	m.scrollRow = min(max(m.scrollRow+delta*3, 0), maxScroll)
 }
 
 func (m *Model) setCursor(line, col int) {
+	// CursorUp/CursorDown move by visual row once the textarea wraps, so a
+	// wrapped long line looks like the end of the document. Widen the
+	// textarea while moving so each logical line is exactly one row.
+	width := max(1, m.width)
+	m.ta.SetWidth(1 << 16)
 	current := m.ta.Line()
 	for current < line {
 		m.ta.CursorDown()
 		next := m.ta.Line()
-		if next == current {
+		if next <= current {
 			break
 		}
 		current = next
@@ -280,12 +452,13 @@ func (m *Model) setCursor(line, col int) {
 	for current > line {
 		m.ta.CursorUp()
 		next := m.ta.Line()
-		if next == current {
+		if next >= current {
 			break
 		}
 		current = next
 	}
 	m.ta.SetCursorColumn(col)
+	m.ta.SetWidth(width)
 }
 
 func (m *Model) placeholderLine(gutter int, showCursor bool) string {
@@ -411,6 +584,15 @@ func (m *Model) OpenFind() {
 	m.findCurrent = 0
 }
 
+// PasteFind appends pasted text to the find query.
+func (m *Model) PasteFind(text string) {
+	if !m.findOpen || text == "" {
+		return
+	}
+	m.findQuery += text
+	m.refreshFind()
+}
+
 func (m *Model) CloseFind() {
 	m.findOpen = false
 	m.findQuery = ""
@@ -506,24 +688,7 @@ func (m *Model) jumpToMatch(index int) {
 	count := len(m.findMatches)
 	m.findCurrent = ((index % count) + count) % count
 	match := m.findMatches[m.findCurrent]
-	line := m.ta.Line()
-	for line < match.line {
-		m.ta.CursorDown()
-		next := m.ta.Line()
-		if next == line {
-			break
-		}
-		line = next
-	}
-	for line > match.line {
-		m.ta.CursorUp()
-		next := m.ta.Line()
-		if next == line {
-			break
-		}
-		line = next
-	}
-	m.ta.SetCursorColumn(match.start)
+	m.setCursor(match.line, match.start)
 }
 
 // matchOverride reports how a character should be styled: 1 for a match and 2
@@ -532,8 +697,14 @@ func (m *Model) matchOverride(line, col int) int {
 	if !m.findOpen || len(m.findMatches) == 0 {
 		return 0
 	}
-	for i, match := range m.findMatches {
-		if match.line == line && col >= match.start && col < match.start+match.length {
+	// refreshFind appends matches line by line, so only this line's matches
+	// need to be checked.
+	first := sort.Search(len(m.findMatches), func(i int) bool {
+		return m.findMatches[i].line >= line
+	})
+	for i := first; i < len(m.findMatches) && m.findMatches[i].line == line; i++ {
+		match := m.findMatches[i]
+		if col >= match.start && col < match.start+match.length {
 			if i == m.findCurrent {
 				return 2
 			}

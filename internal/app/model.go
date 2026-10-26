@@ -268,6 +268,9 @@ type Model struct {
 	exporting bool
 	importing bool
 
+	pendingImport      *importPlan
+	pendingCreateTable string
+
 	infoName    string
 	infoStatus  string
 	infoVersion string
@@ -489,6 +492,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyExportDir(msg.Value)
 		return m, nil
 	case confirm.ConfirmedMsg:
+		if m.pendingImport != nil {
+			m.pendingCmd = m.importCmd(*m.pendingImport)
+			m.pendingImport = nil
+		}
 		cmd := m.pendingCmd
 		m.pendingCmd = nil
 		m.confirm.Close()
@@ -572,12 +579,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar, cmd = m.sidebar.Update(msg)
 		return m, cmd
 	case tea.PasteMsg:
-		var cmd tea.Cmd
-		m.editor, cmd = m.editor.Update(msg)
-		if m.focus == focusEditor {
-			return m, tea.Batch(cmd, m.scheduleTabSave())
-		}
-		return m, cmd
+		return m, m.handlePaste(msg)
 	}
 
 	var cmd tea.Cmd
@@ -665,6 +667,12 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	if msg.Button != tea.MouseLeft {
 		return nil
 	}
+	// Clicking elsewhere ends filter editing but keeps the applied filter,
+	// so keys go to the newly focused pane instead of the filter input.
+	if m.filtering {
+		m.filtering = false
+		m.filterInput.Blur()
+	}
 	if m.options.IsOpen() {
 		var cmd tea.Cmd
 		m.options, cmd = m.options.HandleClick(msg.X, msg.Y, m.width, m.height)
@@ -751,6 +759,35 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 	return nil
 }
 
+// handlePaste routes pasted text to the topmost widget that accepts input.
+// Without this, a paste while a modal is open silently edits the SQL editor
+// behind it.
+func (m *Model) handlePaste(msg tea.PasteMsg) tea.Cmd {
+	switch {
+	case m.form.IsOpen():
+		return m.form.Paste(msg)
+	case m.connForm.IsOpen():
+		return m.connForm.Paste(msg)
+	case m.cellEdit.IsOpen():
+		return m.cellEdit.Paste(msg)
+	case m.dirInput.IsOpen():
+		return m.dirInput.Paste(msg)
+	case m.focus == focusEditor && m.editor.Finding():
+		m.editor.PasteFind(msg.Content)
+		return nil
+	}
+	if m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
+		m.detail.IsOpen() || m.confirm.IsOpen() || m.completion.IsOpen() || m.showHelp {
+		return nil
+	}
+	var cmd tea.Cmd
+	m.editor, cmd = m.editor.Update(msg)
+	if m.focus == focusEditor {
+		return tea.Batch(cmd, m.scheduleTabSave())
+	}
+	return cmd
+}
+
 func (m *Model) anyOverlayOpen() bool {
 	return m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
 		m.detail.IsOpen() || m.connForm.IsOpen() || m.cellEdit.IsOpen() ||
@@ -817,6 +854,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.confirm, cmd = m.confirm.Update(msg)
 		if !m.confirm.IsOpen() && cmd == nil {
 			m.pendingCmd = nil
+			m.pendingImport = nil
 			m.cancelMutation()
 		}
 		return cmd
@@ -1027,7 +1065,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 				m.filterInput.Focus()
 				return nil
 			}
-			if m.context == contextData {
+			if m.context == contextData || m.context == contextQuery {
 				m.filtering = true
 				m.filterInput.SetValue(m.results.Filter())
 				m.filterInput.Focus()
@@ -1124,6 +1162,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 		return nil
 	}
 	if msg.err != nil {
+		m.pendingCreateTable = ""
 		m.setStatus(m.t.T(i18n.KeyErrorConnect, msg.err), true)
 		return m.showConnectionInfo(msg.name, msg.err.Error())
 	}
@@ -1161,6 +1200,12 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 		path := m.pendingScript
 		m.pendingScript = ""
 		cmds = append(cmds, m.runScriptCmd(path))
+	}
+	if pending := m.pendingCreateTable; pending != "" {
+		m.pendingCreateTable = ""
+		if pending == msg.name {
+			cmds = append(cmds, m.openCreateTableForm(pending))
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -1455,7 +1500,14 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 		return nil
 	}
 
+	preserveFilter := ""
+	if m.pager != nil && m.pager.schema == page.schema && m.pager.table == page.table {
+		preserveFilter = m.results.Filter()
+	}
 	m.results.SetResult(out.Result)
+	if preserveFilter != "" {
+		m.results.SetFilter(preserveFilter)
+	}
 	if page.sortColumn != "" {
 		m.results.SetSort(m.results.ColumnIndex(page.sortColumn), page.sortAsc)
 	} else {
@@ -2003,7 +2055,30 @@ func (m *Model) nodeMenuItems(n sidebar.NodeMenuMsg) []menu.Item {
 		}
 		return items
 	default:
-		return m.tableMenuItemsWithExport()
+		items := m.tableMenuItemsWithExport()
+		if viewKind(n.Sub) {
+			filtered := items[:0]
+			for _, item := range items {
+				switch item.ID {
+				case "table.insert", "table.insertrow", "table.import", "table.manage":
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+			items = filtered
+		}
+		return items
+	}
+}
+
+// viewKind reports whether a sidebar table node is a view, which does not
+// support INSERT/import or table DDL.
+func viewKind(sub string) bool {
+	switch strings.ToLower(sub) {
+	case "view", "materialized view":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -2356,6 +2431,9 @@ func (m *Model) switchToConnection(name string) tea.Cmd {
 	if name == m.connName {
 		return nil
 	}
+	if name != m.pendingCreateTable {
+		m.pendingCreateTable = ""
+	}
 	if saved, ok := m.sessions[name]; ok {
 		m.saveCurrentSession()
 		m.activateSession(name, saved)
@@ -2487,6 +2565,7 @@ func (m *Model) closeOverlays() {
 	m.completion.Close()
 	m.showHelp = false
 	m.pendingCmd = nil
+	m.pendingImport = nil
 }
 
 func (m *Model) menuItems() []menu.Item {

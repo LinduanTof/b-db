@@ -196,25 +196,31 @@ func (m mutator) InsertRows(ctx context.Context, table db.TableRef, columns []st
 }
 
 func (m mutator) PreviewInsert(table db.TableRef, columns []string, rows [][]any) string {
-	prefix := m.insertSQL(table, columns)
+	prefix := m.insertPrefix(table, columns)
 	lines := make([]string, 0, len(rows))
 	for _, row := range rows {
 		values := make([]string, len(row))
 		for i, value := range row {
 			values[i] = literal(value)
 		}
-		lines = append(lines, prefix+" ("+strings.Join(values, ", ")+");")
+		lines = append(lines, prefix+" VALUES ("+strings.Join(values, ", ")+");")
 	}
 	return strings.Join(lines, "\n")
 }
 
-func (m mutator) insertSQL(table db.TableRef, columns []string) string {
+func (m mutator) insertPrefix(table db.TableRef, columns []string) string {
 	quoted := make([]string, len(columns))
-	placeholders := make([]string, len(columns))
 	for i, column := range columns {
 		quoted[i] = m.c.d.Quote(column)
-		placeholders[i] = m.c.d.Placeholder(i + 1)
 	}
 	return "INSERT INTO " + m.c.d.Qualified(table.Schema, table.Name) +
-		" (" + strings.Join(quoted, ", ") + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
+		" (" + strings.Join(quoted, ", ") + ")"
+}
+
+func (m mutator) insertSQL(table db.TableRef, columns []string) string {
+	placeholders := make([]string, len(columns))
+	for i := range columns {
+		placeholders[i] = m.c.d.Placeholder(i + 1)
+	}
+	return m.insertPrefix(table, columns) + " VALUES (" + strings.Join(placeholders, ", ") + ")"
 }

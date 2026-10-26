@@ -237,9 +237,10 @@ func (m *Model) handleImportPreview(msg importPreviewMsg) tea.Cmd {
 		}
 		return nil
 	}
-	m.pendingCmd = m.importCmd(msg.plan)
-	preview := importPreviewText(msg.plan, msg.rows, msg.insert)
-	m.confirm.Open(fmt.Sprintf(m.t.T(i18n.KeyImportTitle), qualifiedTable(msg.plan.table.Schema, msg.plan.table.Name)), preview)
+	plan := msg.plan
+	m.pendingImport = &plan
+	preview := importPreviewText(plan, msg.rows, msg.insert)
+	m.confirm.Open(fmt.Sprintf(m.t.T(i18n.KeyImportTitle), qualifiedTable(plan.table.Schema, plan.table.Name)), preview)
 	return nil
 }
 

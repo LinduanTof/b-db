@@ -272,7 +272,7 @@ The sidebar header shows the current connection, its type and the number of acti
 - A dim footer under the grid shows the SQL, total rows, page number, rows on the page and query time; when space is tight the SQL is truncated first
 - Paging runs only in the results pane and never touches the editor; editing or deleting a cell reloads the current page without jumping back to page one
 - Client-side sorting (`o`/`O`) only applies to the current page; in table previews `o`/`O` re-queries with an `ORDER BY` so the sort covers every page and returns to the first page
-- `/` filters the current result in place: every column is matched case-insensitively, the footer shows `visible/total` and exports only include visible rows
+- `/` filters table data and editor query results in place: every column is matched case-insensitively, the footer shows `visible/total` and exports only include visible rows
 - Row counts and sizes in the table overview are estimates (PostgreSQL `reltuples`/`pg_total_relation_size`, MySQL `information_schema`); comments come from `obj_description`/`TABLE_COMMENT`. Unavailable values show `-`, and SQLite, Redis and MongoDB do not provide rows, size or comments
 
 ## Exporting tables and databases
@@ -323,7 +323,7 @@ Select a table in the sidebar, press `m` and choose **Manage**:
 - Add column (name, type, nullable, default) and drop column (picked from the column list)
 - Create index (name, columns, unique) and drop index (picked from the index list)
 
-Select a database node and choose **Create table** to create a table from a name plus a column-definition body such as `id INTEGER PRIMARY KEY, name TEXT`.
+Select a database node and choose **Create table** to create a table from a name plus a column-definition body such as `id INTEGER PRIMARY KEY, name TEXT`. If that database is not the current session, bdb switches to it first so the table is created in the right place. Write actions (insert, import, Manage) are hidden for views.
 
 Every change shows the generated SQL in a confirm box and runs only after `y`. SQLite truncates with `DELETE FROM`. Schema changes are rejected on `read_only` connections and are only offered for PostgreSQL, MySQL and SQLite.
 

@@ -46,6 +46,16 @@ func (m *Model) Open(title, value string) {
 
 func (m *Model) Close() { m.open = false }
 
+// Paste forwards pasted text to the value input.
+func (m *Model) Paste(msg tea.PasteMsg) tea.Cmd {
+	if !m.open {
+		return nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
+}
+
 func (m *Model) SetValue(value string) {
 	m.input.SetValue(value)
 	m.input.CursorEnd()

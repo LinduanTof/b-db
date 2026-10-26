@@ -106,6 +106,24 @@ func (m *Model) Open() {
 
 func (m *Model) Close() { m.open = false }
 
+// Paste forwards pasted text to the focused field.
+func (m *Model) Paste(msg tea.PasteMsg) tea.Cmd {
+	if !m.open {
+		return nil
+	}
+	visible := m.visibleFields()
+	if len(visible) == 0 {
+		return nil
+	}
+	current := visible[min(max(m.focus, 0), len(visible)-1)]
+	if current.kind == fieldType {
+		return nil
+	}
+	var cmd tea.Cmd
+	current.input, cmd = current.input.Update(msg)
+	return cmd
+}
+
 func (m Model) IsOpen() bool { return m.open }
 
 func (m *Model) SetError(text string) {

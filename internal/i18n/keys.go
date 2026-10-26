@@ -163,6 +163,8 @@ const (
 	KeyFormInvalidPort       = "form.invalid_port"
 	KeyFormInvalidDB         = "form.invalid_db"
 	KeyFormDuplicate         = "form.duplicate"
+	KeyFormMoreAbove         = "form.more_above"
+	KeyFormMoreBelow         = "form.more_below"
 	KeyStatusConnectionAdded = "status.connection_added"
 	KeyErrorSaveConnection   = "error.save_connection"
 	KeyErrorLoadConnections  = "error.load_connections"

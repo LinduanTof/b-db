@@ -56,6 +56,14 @@ func TestCreateIndex(t *testing.T) {
 	}
 }
 
+func TestCreateIndexMySQLQuotesColumns(t *testing.T) {
+	got := CreateIndex("mysql", "db", "users", "idx_email", []string{"email"}, false)
+	want := "CREATE INDEX `idx_email` ON `db`.`users` (`email`);"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}
+
 func TestDropIndex(t *testing.T) {
 	if got := DropIndex("postgres", "public", "users", "idx"); got != `DROP INDEX "public"."idx";` {
 		t.Fatalf("unexpected postgres drop index: %s", got)

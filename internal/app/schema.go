@@ -93,7 +93,17 @@ func (m *Model) handleSchemaDone(msg schemaDoneMsg) tea.Cmd {
 	if !msg.reload {
 		return nil
 	}
+	// Column metadata and completion caches are stale after any schema change.
+	m.editCache = map[string]editInfo{}
+	if m.pager != nil {
+		m.pager.metaLoaded = false
+		m.pager.primary = nil
+		m.pager.totalKnown = false
+	}
+	m.completer.Reset()
+	m.tableSchemas = map[string]string{}
 	var cmds []tea.Cmd
+	cmds = append(cmds, m.loadCompletionTablesCmd())
 	if m.context == contextTables {
 		cmds = append(cmds, m.loadOverviewCmd())
 	}
@@ -239,7 +249,7 @@ func (m *Model) openCreateIndexForm(schema, table string) tea.Cmd {
 		{Label: m.t.T(i18n.KeyFormIndexColumns), Placeholder: "col1, col2"},
 		{Label: m.t.T(i18n.KeyFormIndexUnique), Choices: []string{
 			m.t.T(i18n.KeyImportYes), m.t.T(i18n.KeyImportNo),
-		}},
+		}, ValueIndex: 1},
 	})
 	return nil
 }
@@ -297,20 +307,29 @@ func (m *Model) handleIndexesMenu(msg indexesMenuMsg) tea.Cmd {
 }
 
 func (m *Model) openCreateTableForm(session string) tea.Cmd {
+	// The form and the DDL must run on the database the node belongs to. When
+	// the node is not the current session, switch to it first and resume once
+	// the connection is ready.
+	if session != "" && session != m.connName {
+		m.pendingCreateTable = session
+		cmd := m.switchToConnection(session)
+		if m.connName == session {
+			m.pendingCreateTable = ""
+			return tea.Batch(cmd, m.openCreateTableForm(session))
+		}
+		return cmd
+	}
 	if !m.ddlAllowed() {
 		return nil
 	}
 	typ := ""
-	switch {
-	case m.conn != nil && session == m.connName:
+	if m.conn != nil {
 		typ = m.conn.Type()
-	case m.cfg.Find(sessionBase(session)) != nil:
-		typ = m.cfg.Find(sessionBase(session)).Type
 	}
 	schema := "public"
 	switch typ {
 	case config.TypeMySQL:
-		schema = sessionDatabase(session)
+		schema = sessionDatabase(m.connName)
 	case config.TypeSQLite:
 		schema = "main"
 	}

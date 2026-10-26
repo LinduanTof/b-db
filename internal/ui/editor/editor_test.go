@@ -296,3 +296,68 @@ func TestScrollMovesViewportOnly(t *testing.T) {
 		t.Fatalf("unexpected view after scrolling:\n%s", ansi.Strip(view))
 	}
 }
+
+func TestHandleClickBelowWrappedLine(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(20, 8)
+	m.SetValue(strings.Repeat("a", 40) + "\nsecond")
+	m.Focus()
+	m.ta.MoveToBegin()
+	if ok := m.HandleClick(2, 3); !ok {
+		t.Fatal("click should land in the editor")
+	}
+	if line := m.ta.Line(); line != 1 {
+		t.Fatalf("click landed on line %d, want 1", line)
+	}
+}
+
+func TestFindBelowWrappedLine(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(20, 8)
+	m.SetValue(strings.Repeat("a", 40) + "\nsecond target")
+	m.Focus()
+	m.ta.MoveToBegin()
+	m.OpenFind()
+	for _, r := range "target" {
+		m, _ = m.UpdateFind(tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+	if line := m.ta.Line(); line != 1 {
+		t.Fatalf("find landed on line %d, want 1", line)
+	}
+}
+
+func TestLayoutCacheReflectsEdits(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(40, 6)
+	m.SetValue("alpha\nbeta\ngamma")
+	m.Focus()
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "alpha") {
+		t.Fatalf("missing initial text:\n%s", view)
+	}
+	m.SetValue("alpha\nBETA\ngamma")
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "BETA") || strings.Contains(view, "beta") {
+		t.Fatalf("cache did not update after edit:\n%s", view)
+	}
+	// A block comment change must propagate to the following lines.
+	m.SetValue("alpha\n/* start\nBETA\ngamma")
+	m.SetValue("alpha\nBETA\ngamma */")
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "BETA") {
+		t.Fatalf("cache did not update after removing the comment opener:\n%s", view)
+	}
+}
+
+func TestLayoutCacheHandlesResize(t *testing.T) {
+	m := New(i18n.New("en"))
+	value := "SELECT " + strings.Repeat("x", 50)
+	m.SetValue(value)
+	m.Focus()
+	for _, width := range []int{60, 30, 20, 40} {
+		m.SetSize(width, 6)
+		for i, line := range strings.Split(m.View(), "\n") {
+			if got := ansi.StringWidth(line); got != width {
+				t.Fatalf("width %d line %d = %d", width, i, got)
+			}
+		}
+	}
+}

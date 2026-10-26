@@ -272,7 +272,7 @@ connections:
 - 表数据预览会在结果表格下方以一行淡色显示 SQL、总行数、页码、当前页行数和查询时间；空间不足时优先截断 SQL 并保留统计信息
 - 分页查询只在结果面板进行，不会修改编辑器内容；单元格编辑或删除后会刷新当前页，不会跳回第一页
 - 客户端排序（`o`/`O`）只作用于当前页；表数据预览中的 `o`/`O` 会改用数据库 `ORDER BY` 重新查询，排序对所有页生效并回到第一页
-- `/` 会在原地过滤当前结果：对所有列做不区分大小写的匹配，底部显示 `可见/总数`，导出只包含可见行
+- `/` 会在原地过滤表数据和编辑器查询结果：对所有列做不区分大小写的匹配，底部显示 `可见/总数`，导出只包含可见行
 - 表概览的行数与大小是估算值（PostgreSQL `reltuples`/`pg_total_relation_size`，MySQL `information_schema`）；表注释来自 PostgreSQL `obj_description` 或 MySQL `TABLE_COMMENT`。无法获取时显示 `-`，SQLite、Redis、MongoDB 不提供行数、大小与注释
 
 ## 导出表与数据库
@@ -323,7 +323,7 @@ connections:
 - 添加列（列名、类型、是否可空、默认值）、删除列（从列列表中选择）
 - 创建索引（索引名、列、是否唯一）、删除索引（从索引列表中选择）
 
-选中数据库节点后选择「Create table」，输入表名和列定义（例如 `id INTEGER PRIMARY KEY, name TEXT`）即可建表。
+选中数据库节点后选择「Create table」，输入表名和列定义（例如 `id INTEGER PRIMARY KEY, name TEXT`）即可建表。若该数据库不是当前会话，bdb 会先切换过去，确保表建在正确的位置。视图不提供新增行、导入和「Manage」写操作。
 
 所有变更都会先显示生成的 SQL，按 `y` 后才执行。SQLite 的清空使用 `DELETE FROM`。`read_only` 连接会拒绝结构变更，且这些操作只对 PostgreSQL、MySQL 和 SQLite 提供。
 

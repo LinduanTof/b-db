@@ -12,6 +12,7 @@ import (
 
 	"github.com/LinduanTof/b-db/internal/config"
 	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/b-db/internal/ui/sidebar"
 )
 
 func queryInt(t *testing.T, m *Model, stmt string) int64 {
@@ -104,6 +105,7 @@ func TestImportCSVFlow(t *testing.T) {
 		t.Fatalf("import form should open: %s", m.status)
 	}
 	cmd := m.submitImportForm([]string{path, "", ""}, []int{0, 0, 0})
+	m.form.Close() // the real form closes itself on submit
 	m = runCmd(t, m, cmd)
 	if !m.confirm.IsOpen() {
 		t.Fatalf("import should ask for confirmation: %s", m.status)
@@ -111,8 +113,7 @@ func TestImportCSVFlow(t *testing.T) {
 	if preview := ansi.Strip(m.confirm.View()); !strings.Contains(preview, "one@example.com") {
 		t.Fatalf("confirm preview should show the rows:\n%s", preview)
 	}
-	m = runCmd(t, m, m.pendingCmd)
-	m.pendingCmd = nil
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if got := queryInt(t, m, "SELECT COUNT(*) FROM users WHERE email IN ('one@example.com', 'two@example.com')"); got != 2 {
 		t.Fatalf("imported rows = %d, want 2 (status: %s)", got, m.status)
@@ -133,6 +134,7 @@ func TestImportRejectsUnknownColumn(t *testing.T) {
 	}
 	m = runCmd(t, m, m.editInfoCmd("main", "users", "import"))
 	cmd := m.submitImportForm([]string{path, "", ""}, []int{0, 0, 0})
+	m.form.Close() // the real form closes itself on submit
 	m = runCmd(t, m, cmd)
 	if m.confirm.IsOpen() {
 		t.Fatal("unknown columns must not open the confirm dialog")
@@ -437,5 +439,226 @@ func TestMouseWheelScrollsEditor(t *testing.T) {
 	}
 	if after := ansi.Strip(m.editor.View()); after == before {
 		t.Fatal("wheel did not scroll the editor")
+	}
+}
+
+func TestImportCancelClearsState(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	path := filepath.Join(t.TempDir(), "u.csv")
+	if err := os.WriteFile(path, []byte("name,email\na,a@example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "import"))
+	cmd := m.submitImportForm([]string{path, "", ""}, []int{0, 0, 0})
+	m.form.Close()
+	m = runCmd(t, m, cmd)
+	if !m.confirm.IsOpen() {
+		t.Fatalf("confirm should open: %s", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.importing {
+		t.Fatal("cancelling must clear the importing flag")
+	}
+	if strings.Contains(m.status, "Importing") {
+		t.Fatalf("status still shows importing: %q", m.status)
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if !m.options.IsOpen() {
+		t.Fatal("esc should open the options menu after cancelling the import")
+	}
+}
+
+func TestPasteIntoForm(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+	m.openCreateTableForm(m.connName)
+	if !m.form.IsOpen() {
+		t.Fatalf("form should open: %s", m.status)
+	}
+	model, _ := m.Update(tea.PasteMsg{Content: "users_copy"})
+	m = model.(*Model)
+	if !strings.Contains(ansi.Strip(m.form.View()), "users_copy") {
+		t.Fatalf("pasted text should reach the form:\n%s", ansi.Strip(m.form.View()))
+	}
+	if m.editor.Value() != "" {
+		t.Fatalf("paste leaked into the editor: %q", m.editor.Value())
+	}
+}
+
+func TestPasteIntoFind(t *testing.T) {
+	m := testModel(t, "en")
+	m.focus = focusEditor
+	m.editor.SetValue("select 1\nselect 2")
+	m = sendKey(t, m, tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	model, _ := m.Update(tea.PasteMsg{Content: "select"})
+	m = model.(*Model)
+	if _, _, total := m.editor.FindStatus(); total != 2 {
+		t.Fatalf("pasted find query matched %d, want 2", total)
+	}
+}
+
+func TestFilterOnQueryResult(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m.editor.SetValue("SELECT 'alice' AS name UNION ALL SELECT 'bob'")
+	m.focus = focusEditor
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	if m.context != contextQuery {
+		t.Fatalf("context = %v, want query", m.context)
+	}
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "/", Code: '/'})
+	if !m.filtering {
+		t.Fatal("slash should start filtering editor query results")
+	}
+	for _, r := range "bob" {
+		m = sendKey(t, m, tea.KeyPressMsg{Text: string(r), Code: r})
+	}
+	rs := m.results.OrderedResult()
+	if len(rs.Rows) != 1 || rs.Rows[0][0] != "bob" {
+		t.Fatalf("filtered rows = %#v", rs.Rows)
+	}
+}
+
+func TestFilterEndsOnMouseClick(t *testing.T) {
+	m := testModel(t, "en")
+	m.results.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "name"}},
+		Rows:    [][]any{{"alice"}, {"bob"}},
+	})
+	m.context = contextData
+	m.focus = focusResults
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "/", Code: '/'})
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "a", Code: 'a'})
+	if !m.filtering {
+		t.Fatal("setup failed")
+	}
+	m.editor.SetValue("")
+	x := m.sideW + 1 + 2
+	model, _ := m.Update(tea.MouseClickMsg{X: x, Y: 2, Button: tea.MouseLeft})
+	m = model.(*Model)
+	if m.filtering {
+		t.Fatal("mouse click should stop filter editing")
+	}
+	m = sendKey(t, m, tea.KeyPressMsg{Text: "S", Code: 'S'})
+	if m.editor.Value() != "S" {
+		t.Fatalf("keys should go to the editor, got editor=%q filter=%q", m.editor.Value(), m.results.Filter())
+	}
+	if m.results.Filter() != "a" {
+		t.Fatalf("the applied filter should be kept, got %q", m.results.Filter())
+	}
+}
+
+func TestFilterSurvivesPageRefresh(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+	m = runCmd(t, m, m.tableData("main", "users"))
+	if m.pager == nil {
+		t.Fatalf("pager not set: %s", m.status)
+	}
+	m.results.SetFilter("Alice")
+	if got := len(m.results.OrderedResult().Rows); got != 1 {
+		t.Fatalf("filtered rows = %d, want 1", got)
+	}
+	m = runCmd(t, m, m.refreshSource())
+	if m.results.Filter() != "Alice" {
+		t.Fatalf("filter lost after refresh: %q", m.results.Filter())
+	}
+	if got := len(m.results.OrderedResult().Rows); got != 1 {
+		t.Fatalf("filtered rows after refresh = %d, want 1", got)
+	}
+}
+
+func TestEditCacheInvalidatedAfterDDL(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "rowform"))
+	before := len(m.formColumns)
+	m.form.Close()
+
+	m.openAddColumnForm("main", "users")
+	m.submitAddColumn([]string{"extra", "TEXT", "", ""}, []int{0, 0, 0})
+	if !m.confirm.IsOpen() {
+		t.Fatalf("confirm not open: %s", m.status)
+	}
+	m = runCmd(t, m, m.pendingCmd)
+	m.pendingCmd = nil
+
+	m = runCmd(t, m, m.editInfoCmd("main", "users", "rowform"))
+	if after := len(m.formColumns); after != before+1 {
+		t.Fatalf("columns after DDL = %d, want %d", after, before+1)
+	}
+}
+
+func TestCreateIndexDefaultsToNonUnique(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+	m.openCreateIndexForm("main", "users")
+	if !m.form.IsOpen() {
+		t.Fatalf("form should open: %s", m.status)
+	}
+	if !strings.Contains(ansi.Strip(m.form.View()), "‹ No ›") {
+		t.Fatalf("unique index should default to No:\n%s", ansi.Strip(m.form.View()))
+	}
+}
+
+func TestCreateTableSwitchesToTargetSession(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+
+	other := config.Connection{Name: "other", Type: config.TypeSQLite, Path: filepath.Join(t.TempDir(), "other.db")}
+	m.cfg.Connections = append(m.cfg.Connections, other)
+	m.sidebar.AddConnection(other)
+	m.sidebar.SetSize(m.sideW, max(1, m.height-3))
+
+	cmd := m.openCreateTableForm("other")
+	if m.pendingCreateTable != "other" {
+		t.Fatalf("pendingCreateTable = %q", m.pendingCreateTable)
+	}
+	m = runCmd(t, m, cmd)
+	if m.connName != "other" {
+		t.Fatalf("connName = %q, want other (status: %s)", m.connName, m.status)
+	}
+	if !m.form.IsOpen() {
+		t.Fatalf("create table form should open on the target session: %s", m.status)
+	}
+}
+
+func TestViewMenuHidesWriteActions(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer m.conn.Close()
+	items := m.nodeMenuItems(sidebar.NodeMenuMsg{
+		Kind: sidebar.KindTable, Schema: "main", Table: "active_users", Sub: "view",
+	})
+	for _, item := range items {
+		switch item.ID {
+		case "table.insert", "table.insertrow", "table.import", "table.manage":
+			t.Fatalf("view menu should not offer %s", item.ID)
+		}
+	}
+	found := false
+	for _, item := range items {
+		if item.ID == "table.data" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("view menu should still offer data preview: %#v", items)
 	}
 }

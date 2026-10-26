@@ -50,6 +50,16 @@ func (m *Model) Close() {
 	m.input.Blur()
 }
 
+// Paste forwards pasted text to the path input.
+func (m *Model) Paste(msg tea.PasteMsg) tea.Cmd {
+	if !m.open {
+		return nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
+}
+
 func (m Model) IsOpen() bool { return m.open }
 
 func (m *Model) SetError(text string) { m.errText = text }

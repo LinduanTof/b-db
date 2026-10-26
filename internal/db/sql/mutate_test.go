@@ -146,4 +146,7 @@ func TestInsertRows(t *testing.T) {
 	if !strings.Contains(preview, "INSERT INTO") || !strings.Contains(preview, "'alice'") || !strings.Contains(preview, "NULL") {
 		t.Fatalf("preview = %q", preview)
 	}
+	if strings.Contains(preview, "?") {
+		t.Fatalf("preview must not contain placeholders: %q", preview)
+	}
 }
