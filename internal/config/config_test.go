@@ -36,7 +36,7 @@ func TestWarnsOnReadableConfig(t *testing.T) {
 }
 
 func TestLoadExpandsEnv(t *testing.T) {
-	t.Setenv("BDB_TEST_PASSWORD", "s3cret")
+	t.Setenv("DBRIX_TEST_PASSWORD", "s3cret")
 	path := writeConfig(t, `
 default_connection: pg
 connections:
@@ -44,7 +44,7 @@ connections:
     type: postgres
     host: localhost
     user: postgres
-    password: ${BDB_TEST_PASSWORD}
+    password: ${DBRIX_TEST_PASSWORD}
     database: app
 `)
 	cfg, warnings, err := Load(path)
@@ -66,21 +66,21 @@ connections:
 }
 
 func TestLoadMissingEnvFails(t *testing.T) {
-	os.Unsetenv("BDB_MISSING_PASSWORD")
+	os.Unsetenv("DBRIX_MISSING_PASSWORD")
 	path := writeConfig(t, `
 connections:
   - name: pg
     type: postgres
     host: localhost
     user: postgres
-    password: ${BDB_MISSING_PASSWORD}
+    password: ${DBRIX_MISSING_PASSWORD}
     database: app
 `)
 	_, _, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for missing environment variable")
 	}
-	for _, want := range []string{"pg", "password", "BDB_MISSING_PASSWORD"} {
+	for _, want := range []string{"pg", "password", "DBRIX_MISSING_PASSWORD"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not mention %q", err, want)
 		}
@@ -196,13 +196,13 @@ unknown_option: true
 }
 
 func TestExpandConnection(t *testing.T) {
-	t.Setenv("BDB_EXPAND_PASSWORD", "secret")
+	t.Setenv("DBRIX_EXPAND_PASSWORD", "secret")
 	conn, err := ExpandConnection(Connection{
 		Name:     "pg",
 		Type:     TypePostgres,
 		Host:     "localhost",
 		User:     "postgres",
-		Password: "${BDB_EXPAND_PASSWORD}",
+		Password: "${DBRIX_EXPAND_PASSWORD}",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -213,9 +213,9 @@ func TestExpandConnection(t *testing.T) {
 }
 
 func TestExpandConnectionMissingEnv(t *testing.T) {
-	os.Unsetenv("BDB_MISSING_EXPAND")
-	_, err := ExpandConnection(Connection{Name: "pg", Type: TypePostgres, Password: "${BDB_MISSING_EXPAND}"})
-	if err == nil || !strings.Contains(err.Error(), "BDB_MISSING_EXPAND") {
+	os.Unsetenv("DBRIX_MISSING_EXPAND")
+	_, err := ExpandConnection(Connection{Name: "pg", Type: TypePostgres, Password: "${DBRIX_MISSING_EXPAND}"})
+	if err == nil || !strings.Contains(err.Error(), "DBRIX_MISSING_EXPAND") {
 		t.Fatalf("error = %v", err)
 	}
 }

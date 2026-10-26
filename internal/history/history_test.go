@@ -27,7 +27,7 @@ func TestAddDedupeAndLimit(t *testing.T) {
 }
 
 func TestSaveAndReload(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state", "bdb", "history")
+	path := filepath.Join(t.TempDir(), "state", "dbrix", "history")
 	s := Load(path, 100)
 	s.Add("select '中文'")
 	s.Add("select 2;\nselect 3;")

@@ -10,10 +10,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/LinduanTof/b-db/internal/config"
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/export"
-	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/config"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/export"
+	"github.com/LinduanTof/dbrix/internal/i18n"
 )
 
 const (
@@ -368,7 +368,7 @@ func exportTableName(table exportTable) string {
 }
 
 func exportPath(outDir, prefix, ext string, dir bool) string {
-	name := fmt.Sprintf("bdb-%s-%s", sanitizeExportName(prefix), time.Now().Format("20060102-150405.000000000"))
+	name := fmt.Sprintf("dbrix-%s-%s", sanitizeExportName(prefix), time.Now().Format("20060102-150405.000000000"))
 	if !dir && ext != "" {
 		name += "." + ext
 	}

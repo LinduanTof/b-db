@@ -8,8 +8,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/db/dialect"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db/dialect"
 )
 
 // CSVStream writes rows as they are read from the cursor.

@@ -8,13 +8,13 @@ import (
 
 func ExportDirStatePath() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "bdb", "export_dir")
+		return filepath.Join(dir, "dbrix", "export_dir")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".local", "state", "bdb", "export_dir")
+		return filepath.Join(".local", "state", "dbrix", "export_dir")
 	}
-	return filepath.Join(home, ".local", "state", "bdb", "export_dir")
+	return filepath.Join(home, ".local", "state", "dbrix", "export_dir")
 }
 
 // LoadExportDirState reports the saved export directory. The boolean is false

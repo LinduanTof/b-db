@@ -11,7 +11,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 func init() {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 func sample() *db.ResultSet {

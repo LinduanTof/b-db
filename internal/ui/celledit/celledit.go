@@ -7,8 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 type SubmittedMsg struct {
@@ -45,6 +45,16 @@ func (m *Model) Open(title, value string) {
 }
 
 func (m *Model) Close() { m.open = false }
+
+// Paste forwards pasted text to the value input.
+func (m *Model) Paste(msg tea.PasteMsg) tea.Cmd {
+	if !m.open {
+		return nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
+}
 
 func (m *Model) SetValue(value string) {
 	m.input.SetValue(value)

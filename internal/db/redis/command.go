@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 func splitCommand(input string) ([]string, error) {

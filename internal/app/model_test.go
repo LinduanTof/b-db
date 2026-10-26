@@ -12,17 +12,18 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/LinduanTof/b-db/internal/config"
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/history"
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/ui/celledit"
-	uicomplete "github.com/LinduanTof/b-db/internal/ui/complete"
-	"github.com/LinduanTof/b-db/internal/ui/confirm"
-	"github.com/LinduanTof/b-db/internal/ui/connection"
-	"github.com/LinduanTof/b-db/internal/ui/menu"
-	"github.com/LinduanTof/b-db/internal/ui/sidebar"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	"github.com/LinduanTof/dbrix/internal/config"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/history"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/ui/celledit"
+	uicomplete "github.com/LinduanTof/dbrix/internal/ui/complete"
+	"github.com/LinduanTof/dbrix/internal/ui/confirm"
+	"github.com/LinduanTof/dbrix/internal/ui/connection"
+	"github.com/LinduanTof/dbrix/internal/ui/form"
+	"github.com/LinduanTof/dbrix/internal/ui/menu"
+	"github.com/LinduanTof/dbrix/internal/ui/sidebar"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 func testModel(t *testing.T, lang string) *Model {
@@ -78,7 +79,9 @@ func runCmd(t *testing.T, m *Model, cmd tea.Cmd) *Model {
 			sidebar.SchemasLoadedMsg, sidebar.TablesLoadedMsg, sidebar.ColumnsLoadedMsg,
 			sidebar.ConnectMsg, sidebar.TableOpenMsg,
 			sidebar.TableActivateMsg, sidebar.EditorOpenMsg, sidebar.ConnectionInfoMsg, sidebar.NodeMenuMsg, overviewLoadedMsg, versionLoadedMsg,
-			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg:
+			ddlLoadedMsg, indexesLoadedMsg, menu.ActionMsg, menu.ChangedMsg,
+			form.SubmittedMsg, schemaDoneMsg, indexesMenuMsg,
+			importPreviewMsg, importProgressMsg, importedMsg:
 		default:
 			return m
 		}
@@ -655,7 +658,7 @@ func TestPostgresDatabaseDiscovery(t *testing.T) {
 		Host:     "h",
 		User:     "u",
 		Password: "p",
-		Database: "bdb",
+		Database: "dbrix",
 		ReadOnly: true,
 	}
 	m.cfg.Connections = append(m.cfg.Connections, pg)
@@ -663,12 +666,12 @@ func TestPostgresDatabaseDiscovery(t *testing.T) {
 	if cmd := m.handleDatabasesLoaded(databasesLoadedMsg{
 		id:        m.connectSeq,
 		base:      "pg",
-		databases: []string{"bdb", "other", "postgres"},
+		databases: []string{"dbrix", "other", "postgres"},
 	}); cmd != nil {
 		t.Fatal("database discovery should not return a command")
 	}
 
-	if m.cfg.Find("pg/bdb") != nil {
+	if m.cfg.Find("pg/dbrix") != nil {
 		t.Fatal("current database should keep the base connection name")
 	}
 	for _, name := range []string{"other", "postgres"} {
@@ -679,7 +682,7 @@ func TestPostgresDatabaseDiscovery(t *testing.T) {
 		}
 	}
 	view := ansi.Strip(m.sidebar.View())
-	for _, want := range []string{"pg", "bdb", "other", "postgres"} {
+	for _, want := range []string{"pg", "dbrix", "other", "postgres"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("sidebar missing %q:\n%s", want, view)
 		}
@@ -1394,7 +1397,7 @@ func TestExportCSV(t *testing.T) {
 	if m.results.Result() == nil {
 		t.Fatal("result lost after export")
 	}
-	if !strings.Contains(m.status, "bdb-export-") {
+	if !strings.Contains(m.status, "dbrix-export-") {
 		t.Fatalf("status = %q", m.status)
 	}
 }
@@ -1543,11 +1546,11 @@ func TestStaleAsyncMessagesIgnored(t *testing.T) {
 func TestAddConnectionExpandsEnv(t *testing.T) {
 	m := testModel(t, "en")
 	path := filepath.Join(t.TempDir(), "env.db")
-	t.Setenv("BDB_TEST_DB_PATH", path)
+	t.Setenv("DBRIX_TEST_DB_PATH", path)
 	cmd := m.addConnection(config.Connection{
 		Name: "env-sqlite",
 		Type: config.TypeSQLite,
-		Path: "${BDB_TEST_DB_PATH}",
+		Path: "${DBRIX_TEST_DB_PATH}",
 	})
 	if cmd == nil {
 		t.Fatalf("addConnection returned no command: %s", m.status)
@@ -1569,7 +1572,7 @@ func TestAddConnectionExpandsEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "${BDB_TEST_DB_PATH}") {
+	if !strings.Contains(string(data), "${DBRIX_TEST_DB_PATH}") {
 		t.Fatalf("runtime file should keep the env reference:\n%s", data)
 	}
 }
@@ -2008,14 +2011,14 @@ func TestNodeMenuItemsPerKind(t *testing.T) {
 		t.Fatalf("connection items = %d, want 3", len(connection))
 	}
 	database := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindDatabase, Label: "main", SessionName: "local-sqlite/main"})
-	if len(database) != 9 {
-		t.Fatalf("database items = %d, want 9", len(database))
+	if len(database) != 11 {
+		t.Fatalf("database items = %d, want 11", len(database))
 	}
-	if database[0].ID != "db.open" || database[2].ID != "db.close" || database[4].ID != "db.export.sql" {
+	if database[0].ID != "db.open" || database[2].ID != "db.close" || database[4].ID != "db.createtable" || database[6].ID != "db.export.sql" {
 		t.Fatalf("database items = %#v", database)
 	}
 	table := m.nodeMenuItems(sidebar.NodeMenuMsg{Kind: sidebar.KindTable, Schema: "main", Table: "users", Sub: "table"})
-	if len(table) != 12 || table[0].ID != "table.data" || table[7].ID != "table.export.sql" {
+	if len(table) != 15 || table[0].ID != "table.data" || table[8].ID != "table.manage" || table[10].ID != "table.export.sql" {
 		t.Fatalf("table items = %#v", table)
 	}
 }

@@ -21,13 +21,13 @@ type Store struct {
 
 func DefaultPath() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "bdb", "history")
+		return filepath.Join(dir, "dbrix", "history")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".local", "state", "bdb", "history")
+		return filepath.Join(".local", "state", "dbrix", "history")
 	}
-	return filepath.Join(home, ".local", "state", "bdb", "history")
+	return filepath.Join(home, ".local", "state", "dbrix", "history")
 }
 
 func Load(path string, limit int) *Store {

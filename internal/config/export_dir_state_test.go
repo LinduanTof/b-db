@@ -17,7 +17,7 @@ func TestExportDirStateRoundTrip(t *testing.T) {
 	if got, ok := LoadExportDirState(); !ok || got != "/tmp/exports" {
 		t.Fatalf("state = %q ok=%v", got, ok)
 	}
-	info, err := os.Stat(filepath.Join(os.Getenv("XDG_STATE_HOME"), "bdb", "export_dir"))
+	info, err := os.Stat(filepath.Join(os.Getenv("XDG_STATE_HOME"), "dbrix", "export_dir"))
 	if err != nil {
 		t.Fatal(err)
 	}

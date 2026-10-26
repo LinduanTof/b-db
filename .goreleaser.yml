@@ -1,11 +1,11 @@
 version: 2
 
-project_name: bdb
+project_name: dbrix
 
 builds:
-  - id: bdb
-    main: ./cmd/bdb
-    binary: bdb
+  - id: dbrix
+    main: ./cmd/dbrix
+    binary: dbrix
     env:
       - CGO_ENABLED=0
     goos:

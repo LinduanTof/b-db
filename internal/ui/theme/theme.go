@@ -54,10 +54,10 @@ var palettes = map[string]Palette{
 	},
 	"gruvbox": {
 		Title: "#b8bb26", Header: "#8ec07c", Muted: "#928374", Error: "#fb4934",
-		SelectedFG: "#ebdbb2", SelectedBG: "#3c3836",
+		SelectedFG: "#edbrixb2", SelectedBG: "#3c3836",
 		CursorFG: "#282828", CursorBG: "#fabd2f",
 		Null:     "#928374",
-		StatusFG: "#ebdbb2", StatusBG: "#3c3836",
+		StatusFG: "#edbrixb2", StatusBG: "#3c3836",
 		StatusErrFG: "#282828", StatusErrBG: "#fb4934",
 		MenuFG: "#fabd2f", MenuBG: "#3c3836",
 		SyntaxKeyword: "#fb4934", SyntaxString: "#b8bb26", SyntaxComment: "#928374", SyntaxNumber: "#d3869b", SyntaxFunction: "#fabd2f",

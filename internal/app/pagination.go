@@ -8,9 +8,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/db/dialect"
-	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db/dialect"
+	"github.com/LinduanTof/dbrix/internal/i18n"
 )
 
 type orderTerm struct {

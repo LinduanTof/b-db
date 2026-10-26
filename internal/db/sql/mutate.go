@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 type mutator struct{ c *conn }
@@ -132,4 +132,95 @@ func literal(v any) string {
 	default:
 		return fmt.Sprint(x)
 	}
+}
+
+// InsertRows writes every row in one transaction. A single failing row rolls
+// the whole batch back.
+func (m mutator) InsertRows(ctx context.Context, table db.TableRef, columns []string, rows db.RowSource, onProgress func(int64)) (int64, error) {
+	if len(columns) == 0 {
+		return 0, fmt.Errorf("insert needs at least one column")
+	}
+	if rows == nil {
+		return 0, nil
+	}
+	query := m.insertSQL(table, columns)
+	tx, err := m.c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	stmt, err := tx.PrepareContext(ctx, query)
+	if err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+	var total int64
+	var index int64
+	for rows.Next() {
+		row := rows.Values()
+		index++
+		if len(row) != len(columns) {
+			stmt.Close()
+			tx.Rollback()
+			return total, fmt.Errorf("row %d has %d values, want %d", index, len(row), len(columns))
+		}
+		res, err := stmt.ExecContext(ctx, row...)
+		if err != nil {
+			stmt.Close()
+			tx.Rollback()
+			return total, fmt.Errorf("row %d: %w", index, err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			stmt.Close()
+			tx.Rollback()
+			return total, fmt.Errorf("row %d: %w", index, err)
+		}
+		total += affected
+		if onProgress != nil {
+			onProgress(index)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		stmt.Close()
+		tx.Rollback()
+		return total, err
+	}
+	if err := stmt.Close(); err != nil {
+		tx.Rollback()
+		return total, err
+	}
+	if err := tx.Commit(); err != nil {
+		return total, err
+	}
+	return total, nil
+}
+
+func (m mutator) PreviewInsert(table db.TableRef, columns []string, rows [][]any) string {
+	prefix := m.insertPrefix(table, columns)
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		values := make([]string, len(row))
+		for i, value := range row {
+			values[i] = literal(value)
+		}
+		lines = append(lines, prefix+" VALUES ("+strings.Join(values, ", ")+");")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m mutator) insertPrefix(table db.TableRef, columns []string) string {
+	quoted := make([]string, len(columns))
+	for i, column := range columns {
+		quoted[i] = m.c.d.Quote(column)
+	}
+	return "INSERT INTO " + m.c.d.Qualified(table.Schema, table.Name) +
+		" (" + strings.Join(quoted, ", ") + ")"
+}
+
+func (m mutator) insertSQL(table db.TableRef, columns []string) string {
+	placeholders := make([]string, len(columns))
+	for i := range columns {
+		placeholders[i] = m.c.d.Placeholder(i + 1)
+	}
+	return m.insertPrefix(table, columns) + " VALUES (" + strings.Join(placeholders, ", ") + ")"
 }

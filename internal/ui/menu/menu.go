@@ -7,9 +7,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/ui/textutil"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/ui/textutil"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 type Kind int
@@ -23,10 +23,20 @@ const (
 type Item struct {
 	ID       string
 	LabelKey string
-	Kind     Kind
-	Choices  []string
-	Value    int
-	Tab      int
+	// Label overrides LabelKey for items whose text is not translated, such
+	// as the name of a column or index.
+	Label   string
+	Kind    Kind
+	Choices []string
+	Value   int
+	Tab     int
+}
+
+func (m *Model) label(item Item) string {
+	if item.Label != "" {
+		return item.Label
+	}
+	return m.t.T(item.LabelKey)
 }
 
 type ActionMsg struct {
@@ -125,15 +135,15 @@ func (m *Model) innerWidth() int {
 	for _, item := range m.items {
 		switch item.Kind {
 		case KindHeader:
-			natural = max(natural, textutil.Width(m.t.T(item.LabelKey))+3)
+			natural = max(natural, textutil.Width(m.label(item))+3)
 		case KindChoice:
 			value := ""
 			if len(item.Choices) > 0 {
 				value = item.Choices[min(max(item.Value, 0), len(item.Choices)-1)]
 			}
-			natural = max(natural, textutil.Width(m.t.T(item.LabelKey))+textutil.Width(value)+11)
+			natural = max(natural, textutil.Width(m.label(item))+textutil.Width(value)+11)
 		default:
-			natural = max(natural, textutil.Width(m.t.T(item.LabelKey))+5)
+			natural = max(natural, textutil.Width(m.label(item))+5)
 		}
 	}
 	natural = max(natural, min(textutil.Width(m.menuTitle()), 40)+6)
@@ -198,15 +208,15 @@ func (m *Model) renderTabs(width int) (string, [][2]int) {
 }
 
 func (m *Model) renderSection(item Item, width int) string {
-	if item.LabelKey == "" {
+	if item.LabelKey == "" && item.Label == "" {
 		return ""
 	}
-	label := strings.ToUpper(m.t.T(item.LabelKey))
+	label := strings.ToUpper(m.label(item))
 	return theme.Header.Render(textutil.FitLine(" ▎"+label, width))
 }
 
 func (m *Model) renderItem(item Item, selected bool, width int) string {
-	label := m.t.T(item.LabelKey)
+	label := m.label(item)
 	if item.Kind == KindChoice && len(item.Choices) > 0 {
 		value := item.Choices[min(max(item.Value, 0), len(item.Choices)-1)]
 		controls := "‹ " + value + " ›"

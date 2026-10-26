@@ -14,30 +14,31 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
-	ac "github.com/LinduanTof/b-db/internal/complete"
-	"github.com/LinduanTof/b-db/internal/config"
-	"github.com/LinduanTof/b-db/internal/db"
-	_ "github.com/LinduanTof/b-db/internal/db/mongo"
-	_ "github.com/LinduanTof/b-db/internal/db/redis"
-	_ "github.com/LinduanTof/b-db/internal/db/sql"
-	"github.com/LinduanTof/b-db/internal/export"
-	"github.com/LinduanTof/b-db/internal/history"
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/query"
-	"github.com/LinduanTof/b-db/internal/sqlscript"
-	"github.com/LinduanTof/b-db/internal/ui/celledit"
-	uicomplete "github.com/LinduanTof/b-db/internal/ui/complete"
-	"github.com/LinduanTof/b-db/internal/ui/confirm"
-	"github.com/LinduanTof/b-db/internal/ui/connection"
-	"github.com/LinduanTof/b-db/internal/ui/detail"
-	"github.com/LinduanTof/b-db/internal/ui/editor"
-	"github.com/LinduanTof/b-db/internal/ui/menu"
-	"github.com/LinduanTof/b-db/internal/ui/pathinput"
-	"github.com/LinduanTof/b-db/internal/ui/results"
-	"github.com/LinduanTof/b-db/internal/ui/sidebar"
-	"github.com/LinduanTof/b-db/internal/ui/statusbar"
-	"github.com/LinduanTof/b-db/internal/ui/textview"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	ac "github.com/LinduanTof/dbrix/internal/complete"
+	"github.com/LinduanTof/dbrix/internal/config"
+	"github.com/LinduanTof/dbrix/internal/db"
+	_ "github.com/LinduanTof/dbrix/internal/db/mongo"
+	_ "github.com/LinduanTof/dbrix/internal/db/redis"
+	_ "github.com/LinduanTof/dbrix/internal/db/sql"
+	"github.com/LinduanTof/dbrix/internal/export"
+	"github.com/LinduanTof/dbrix/internal/history"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/query"
+	"github.com/LinduanTof/dbrix/internal/sqlscript"
+	"github.com/LinduanTof/dbrix/internal/ui/celledit"
+	uicomplete "github.com/LinduanTof/dbrix/internal/ui/complete"
+	"github.com/LinduanTof/dbrix/internal/ui/confirm"
+	"github.com/LinduanTof/dbrix/internal/ui/connection"
+	"github.com/LinduanTof/dbrix/internal/ui/detail"
+	"github.com/LinduanTof/dbrix/internal/ui/editor"
+	"github.com/LinduanTof/dbrix/internal/ui/form"
+	"github.com/LinduanTof/dbrix/internal/ui/menu"
+	"github.com/LinduanTof/dbrix/internal/ui/pathinput"
+	"github.com/LinduanTof/dbrix/internal/ui/results"
+	"github.com/LinduanTof/dbrix/internal/ui/sidebar"
+	"github.com/LinduanTof/dbrix/internal/ui/statusbar"
+	"github.com/LinduanTof/dbrix/internal/ui/textview"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 type focus int
@@ -109,6 +110,7 @@ type mutationDoneMsg struct {
 	id       uint64
 	kind     string
 	affected int64
+	table    *db.TableRef
 	err      error
 }
 
@@ -205,6 +207,10 @@ type Model struct {
 	cellEdit   celledit.Model
 	confirm    confirm.Model
 	dirInput   pathinput.Model
+	form       form.Model
+
+	formTarget  db.TableRef
+	formColumns []db.Column
 
 	pendingCmd tea.Cmd
 	pager      *pagination
@@ -260,6 +266,10 @@ type Model struct {
 	outDir    string
 	send      func(tea.Msg)
 	exporting bool
+	importing bool
+
+	pendingImport      *importPlan
+	pendingCreateTable string
 
 	infoName    string
 	infoStatus  string
@@ -328,6 +338,7 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.cellEdit = celledit.New(t)
 	m.confirm = confirm.New(t)
 	m.dirInput = pathinput.New(t)
+	m.form = form.New(t)
 	m.editCache = map[string]editInfo{}
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
@@ -363,6 +374,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cellEdit.SetSize(msg.Width, msg.Height)
 		m.confirm.SetSize(msg.Width, msg.Height)
 		m.dirInput.SetSize(msg.Width, msg.Height)
+		m.form.SetSize(msg.Width, msg.Height)
 		m.layout()
 		return m, nil
 	case tea.KeyPressMsg:
@@ -474,10 +486,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleDatabasesLoaded(msg)
 	case celledit.SubmittedMsg:
 		return m, m.openUpdateConfirm(msg.Value)
+	case form.SubmittedMsg:
+		return m, m.handleFormSubmit(msg)
 	case pathinput.SubmittedMsg:
 		m.applyExportDir(msg.Value)
 		return m, nil
 	case confirm.ConfirmedMsg:
+		if m.pendingImport != nil {
+			m.pendingCmd = m.importCmd(*m.pendingImport)
+			m.pendingImport = nil
+		}
 		cmd := m.pendingCmd
 		m.pendingCmd = nil
 		m.confirm.Close()
@@ -492,6 +510,34 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus(m.t.T(i18n.KeyErrorExport, msg.err), true)
 		} else {
 			m.setStatus(m.t.T(i18n.KeyStatusExported, msg.path), false)
+		}
+		return m, nil
+	case schemaDoneMsg:
+		return m, m.handleSchemaDone(msg)
+	case indexesMenuMsg:
+		return m, m.handleIndexesMenu(msg)
+	case importPreviewMsg:
+		return m, m.handleImportPreview(msg)
+	case importProgressMsg:
+		m.setStatus(m.t.T(i18n.KeyStatusImportingRows, msg.label, fmt.Sprint(msg.rows)), false)
+		return m, nil
+	case importedMsg:
+		m.importing = false
+		m.cancelMutation()
+		if msg.id != m.connectSeq {
+			return m, nil
+		}
+		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				m.setStatus(m.t.T(i18n.KeyStatusCancelled), false)
+				return m, nil
+			}
+			m.setStatus(m.t.T(i18n.KeyErrorImport, msg.err), true)
+			return m, nil
+		}
+		m.setStatus(m.t.T(i18n.KeyStatusImported, msg.rows), false)
+		if m.pager != nil && m.pager.schema == msg.table.Schema && m.pager.table == msg.table.Name {
+			return m, m.refreshSource()
 		}
 		return m, nil
 	case exportProgressMsg:
@@ -533,12 +579,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar, cmd = m.sidebar.Update(msg)
 		return m, cmd
 	case tea.PasteMsg:
-		var cmd tea.Cmd
-		m.editor, cmd = m.editor.Update(msg)
-		if m.focus == focusEditor {
-			return m, tea.Batch(cmd, m.scheduleTabSave())
-		}
-		return m, cmd
+		return m, m.handlePaste(msg)
 	}
 
 	var cmd tea.Cmd
@@ -550,7 +591,7 @@ func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle = "bdb"
+	v.WindowTitle = "dbrix"
 	// Lets terminals that support the Kitty keyboard protocol distinguish
 	// ctrl+enter from plain enter.
 	v.KeyboardEnhancements = tea.KeyboardEnhancements{
@@ -561,9 +602,76 @@ func (m *Model) View() tea.View {
 	return v
 }
 
+type paneKind int
+
+const (
+	paneNone paneKind = iota
+	paneSidebar
+	paneEditor
+	paneResults
+)
+
+// paneAt maps a screen coordinate to the visible pane and returns the x/y
+// relative to that pane. Zoom, columns and results-top layouts are resolved
+// here so click and wheel handling always agree.
+func (m *Model) paneAt(x, y int) (paneKind, int, int) {
+	if y < 0 || y >= m.height-2 {
+		return paneNone, 0, 0
+	}
+	if m.effectiveZoom() {
+		switch m.focus {
+		case focusEditor:
+			return paneEditor, x, y
+		case focusResults:
+			return paneResults, x, y
+		default:
+			return paneSidebar, x, y
+		}
+	}
+	if x < m.sideW {
+		return paneSidebar, x, y
+	}
+	editorStart := m.sideW + 1
+	if x < editorStart || x >= editorStart+m.rightW {
+		return paneNone, 0, 0
+	}
+	relX := x - editorStart
+	if m.columnsActive {
+		switch {
+		case relX < m.editorW:
+			return paneEditor, relX, y
+		case relX >= m.editorW+1:
+			return paneResults, relX - m.editorW - 1, y
+		}
+		return paneNone, 0, 0
+	}
+	if m.layoutMode == config.LayoutResultsTop {
+		switch {
+		case y < m.resultsH:
+			return paneResults, relX, y
+		case y >= m.resultsH+1 && y < m.resultsH+1+m.editorH:
+			return paneEditor, relX, y - m.resultsH - 1
+		}
+		return paneNone, 0, 0
+	}
+	switch {
+	case y < m.editorH:
+		return paneEditor, relX, y
+	case y >= m.editorH+1 && y < m.editorH+1+m.resultsH:
+		return paneResults, relX, y - m.editorH - 1
+	}
+	return paneNone, 0, 0
+}
+
 func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	if msg.Button != tea.MouseLeft {
 		return nil
+	}
+	// Clicking elsewhere ends filter editing but keeps the applied filter,
+	// so keys go to the newly focused pane instead of the filter input.
+	if m.filtering {
+		m.filtering = false
+		m.filterInput.Blur()
 	}
 	if m.options.IsOpen() {
 		var cmd tea.Cmd
@@ -578,51 +686,31 @@ func (m *Model) handleMouseClick(msg tea.MouseClickMsg) tea.Cmd {
 	if m.anyOverlayOpen() {
 		return nil
 	}
-	x, y := msg.X, msg.Y
-	if m.effectiveZoom() {
-		if y < 0 || y >= m.height-2 {
-			return nil
-		}
-		switch m.focus {
-		case focusEditor:
-			return m.editor.Focus()
-		case focusResults:
-			m.results.HandleClick(x, y-1)
-		default:
-			return m.sidebar.HandleClick(y - 1)
-		}
-		return nil
-	}
-	if x < m.sideW {
-		if y < 0 || y >= m.height-2 {
-			return nil
-		}
+
+	kind, relX, paneY := m.paneAt(msg.X, msg.Y)
+	switch kind {
+	case paneSidebar:
 		m.editor.Blur()
 		m.focus = focusSidebar
 		m.layout()
-		if y == 0 {
+		if paneY == 0 {
 			return nil
 		}
-		return m.sidebar.HandleClick(y - 1)
-	}
-
-	editorStart := m.sideW + 1
-	if x < editorStart || x >= editorStart+m.rightW {
-		return nil
-	}
-	relX := x - editorStart
-	switch {
-	case y >= 0 && y < m.editorH:
+		return m.sidebar.HandleClick(paneY - 1)
+	case paneEditor:
 		m.focus = focusEditor
 		m.layout()
+		// The editor body starts below the pane title and the tab bar.
+		if paneY >= 2 {
+			m.editor.HandleClick(relX, paneY-2)
+		}
 		return m.editor.Focus()
-	case y >= m.editorH+1 && y < m.editorH+1+m.resultsH:
+	case paneResults:
 		m.editor.Blur()
 		m.focus = focusResults
 		m.layout()
-		relY := y - (m.editorH + 2)
-		if relY >= 0 {
-			m.results.HandleClick(relX, relY)
+		if paneY >= 1 {
+			m.results.HandleClick(relX, paneY-1)
 		}
 	}
 	return nil
@@ -659,33 +747,52 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 		return nil
 	}
 
-	if m.effectiveZoom() {
-		switch m.focus {
-		case focusResults:
-			m.results.Scroll(delta)
-		case focusSidebar:
-			m.sidebar.Scroll(delta)
-		}
-		return nil
-	}
-
-	x, y := msg.X, msg.Y
-	if x < m.sideW && y >= 0 && y < m.height-2 {
+	kind, _, _ := m.paneAt(msg.X, msg.Y)
+	switch kind {
+	case paneSidebar:
 		m.sidebar.Scroll(delta)
-		return nil
-	}
-	editorStart := m.sideW + 1
-	if x >= editorStart && x < editorStart+m.rightW &&
-		y >= m.editorH+2 && y < m.editorH+1+m.resultsH {
+	case paneEditor:
+		m.editor.Scroll(delta)
+	case paneResults:
 		m.results.Scroll(delta)
 	}
 	return nil
 }
 
+// handlePaste routes pasted text to the topmost widget that accepts input.
+// Without this, a paste while a modal is open silently edits the SQL editor
+// behind it.
+func (m *Model) handlePaste(msg tea.PasteMsg) tea.Cmd {
+	switch {
+	case m.form.IsOpen():
+		return m.form.Paste(msg)
+	case m.connForm.IsOpen():
+		return m.connForm.Paste(msg)
+	case m.cellEdit.IsOpen():
+		return m.cellEdit.Paste(msg)
+	case m.dirInput.IsOpen():
+		return m.dirInput.Paste(msg)
+	case m.focus == focusEditor && m.editor.Finding():
+		m.editor.PasteFind(msg.Content)
+		return nil
+	}
+	if m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
+		m.detail.IsOpen() || m.confirm.IsOpen() || m.completion.IsOpen() || m.showHelp {
+		return nil
+	}
+	var cmd tea.Cmd
+	m.editor, cmd = m.editor.Update(msg)
+	if m.focus == focusEditor {
+		return tea.Batch(cmd, m.scheduleTabSave())
+	}
+	return cmd
+}
+
 func (m *Model) anyOverlayOpen() bool {
 	return m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
 		m.detail.IsOpen() || m.connForm.IsOpen() || m.cellEdit.IsOpen() ||
-		m.confirm.IsOpen() || m.completion.IsOpen() || m.dirInput.IsOpen() || m.showHelp
+		m.confirm.IsOpen() || m.completion.IsOpen() || m.dirInput.IsOpen() ||
+		m.form.IsOpen() || m.showHelp
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -717,6 +824,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.dirInput, cmd = m.dirInput.Update(msg)
 		return cmd
 	}
+	if m.form.IsOpen() {
+		var cmd tea.Cmd
+		m.form, cmd = m.form.Update(msg)
+		return cmd
+	}
 	if m.textView.IsOpen() {
 		var cmd tea.Cmd
 		m.textView, cmd = m.textView.Update(msg)
@@ -742,6 +854,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.confirm, cmd = m.confirm.Update(msg)
 		if !m.confirm.IsOpen() && cmd == nil {
 			m.pendingCmd = nil
+			m.pendingImport = nil
 			m.cancelMutation()
 		}
 		return cmd
@@ -750,10 +863,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		switch key {
 		case "esc":
 			m.filtering = false
-			m.overviewFilter = ""
 			m.filterInput.SetValue("")
 			m.filterInput.Blur()
-			m.rebuildOverview()
+			if m.context == contextTables {
+				m.overviewFilter = ""
+				m.rebuildOverview()
+			} else {
+				m.results.SetFilter("")
+			}
 			return nil
 		case "enter":
 			m.filtering = false
@@ -762,10 +879,20 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		m.filterInput, cmd = m.filterInput.Update(msg)
-		if value := m.filterInput.Value(); value != m.overviewFilter {
-			m.overviewFilter = value
-			m.rebuildOverview()
+		value := m.filterInput.Value()
+		if m.context == contextTables {
+			if value != m.overviewFilter {
+				m.overviewFilter = value
+				m.rebuildOverview()
+			}
+		} else if value != m.results.Filter() {
+			m.results.SetFilter(value)
 		}
+		return cmd
+	}
+	if m.focus == focusEditor && m.editor.Finding() {
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.UpdateFind(msg)
 		return cmd
 	}
 	if m.showHelp {
@@ -783,8 +910,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 	if key == "esc" {
-		if m.running {
+		if m.running || m.importing {
 			m.cancelQuery()
+			m.cancelMutation()
 			return nil
 		}
 		m.completion.Close()
@@ -843,6 +971,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.switchTab(1)
 		case "ctrl+shift+tab":
 			return m.switchTab(-1)
+		case "ctrl+f":
+			m.editor.OpenFind()
+			return nil
+		case "alt+e":
+			return m.explainQuery()
 		}
 		if (key == "alt+left" || key == "alt+right") && len(m.tabs) > 1 {
 			if key == "alt+left" {
@@ -929,6 +1062,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			if m.context == contextTables {
 				m.filtering = true
 				m.filterInput.SetValue(m.overviewFilter)
+				m.filterInput.Focus()
+				return nil
+			}
+			if m.context == contextData || m.context == contextQuery {
+				m.filtering = true
+				m.filterInput.SetValue(m.results.Filter())
 				m.filterInput.Focus()
 				return nil
 			}
@@ -1023,6 +1162,7 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 		return nil
 	}
 	if msg.err != nil {
+		m.pendingCreateTable = ""
 		m.setStatus(m.t.T(i18n.KeyErrorConnect, msg.err), true)
 		return m.showConnectionInfo(msg.name, msg.err.Error())
 	}
@@ -1060,6 +1200,12 @@ func (m *Model) handleConnOpened(msg connOpenedMsg) tea.Cmd {
 		path := m.pendingScript
 		m.pendingScript = ""
 		cmds = append(cmds, m.runScriptCmd(path))
+	}
+	if pending := m.pendingCreateTable; pending != "" {
+		m.pendingCreateTable = ""
+		if pending == msg.name {
+			cmds = append(cmds, m.openCreateTableForm(pending))
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -1162,6 +1308,44 @@ func (m *Model) runQuery() tea.Cmd {
 	}
 	m.setContext(contextQuery)
 	return m.runStatement(stmt, true, 0)
+}
+
+// explainQuery runs the first statement in the editor through the dialect's
+// EXPLAIN form. It never uses EXPLAIN ANALYZE, so the statement is not executed.
+func (m *Model) explainQuery() tea.Cmd {
+	if m.conn == nil {
+		m.setStatus(m.t.T(i18n.KeyStatusNoConnection), true)
+		return nil
+	}
+	stmt := strings.TrimSpace(m.editor.Value())
+	if stmt == "" {
+		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
+		return nil
+	}
+	typ := m.conn.Type()
+	var prefix string
+	switch typ {
+	case config.TypePostgres:
+		prefix = "EXPLAIN (FORMAT TEXT) "
+	case config.TypeMySQL:
+		prefix = "EXPLAIN "
+	case config.TypeSQLite:
+		prefix = "EXPLAIN QUERY PLAN "
+	default:
+		m.setStatus(m.t.T(i18n.KeyErrorExplain, typ), true)
+		return nil
+	}
+	stmts, err := sqlscript.SplitFor(stmt, typ)
+	if err != nil {
+		m.setStatus(m.t.T(i18n.KeyErrorQuery, err), true)
+		return nil
+	}
+	if len(stmts) == 0 {
+		m.setStatus(m.t.T(i18n.KeyStatusEmptyQuery), false)
+		return nil
+	}
+	m.setContext(contextQuery)
+	return m.runStatement(prefix+stmts[0], false, 0)
 }
 
 func (m *Model) runTableCommand(stmt string) tea.Cmd {
@@ -1316,7 +1500,14 @@ func (m *Model) handleTablePageDone(msg tablePageDoneMsg) tea.Cmd {
 		return nil
 	}
 
+	preserveFilter := ""
+	if m.pager != nil && m.pager.schema == page.schema && m.pager.table == page.table {
+		preserveFilter = m.results.Filter()
+	}
 	m.results.SetResult(out.Result)
+	if preserveFilter != "" {
+		m.results.SetFilter(preserveFilter)
+	}
 	if page.sortColumn != "" {
 		m.results.SetSort(m.results.ColumnIndex(page.sortColumn), page.sortAsc)
 	} else {
@@ -1810,6 +2001,9 @@ func (m *Model) tableMenuItems() []menu.Item {
 		{ID: "table.indexes", LabelKey: i18n.KeyTableIndexes, Kind: menu.KindAction},
 		{ID: "table.select", LabelKey: i18n.KeyTableSelect, Kind: menu.KindAction},
 		{ID: "table.insert", LabelKey: i18n.KeyMenuInsert, Kind: menu.KindAction},
+		{ID: "table.insertrow", LabelKey: i18n.KeyMenuInsertRow, Kind: menu.KindAction},
+		{ID: "table.import", LabelKey: i18n.KeyMenuImport, Kind: menu.KindAction},
+		{ID: "table.manage", LabelKey: i18n.KeyMenuManageTable, Kind: menu.KindAction},
 	}
 }
 
@@ -1852,11 +2046,39 @@ func (m *Model) nodeMenuItems(n sidebar.NodeMenuMsg) []menu.Item {
 			{ID: "db.close", LabelKey: i18n.KeyMenuCloseSession, Kind: menu.KindAction},
 		}
 		if sqlExportable(m.sessionType(n.SessionName)) {
+			items = append(items, menu.Item{
+				Kind: menu.KindHeader, LabelKey: i18n.KeyMenuManageTable,
+			}, menu.Item{
+				ID: "db.createtable", LabelKey: i18n.KeyMenuCreateTable, Kind: menu.KindAction,
+			})
 			items = append(items, exportMenuItems("db")...)
 		}
 		return items
 	default:
-		return m.tableMenuItemsWithExport()
+		items := m.tableMenuItemsWithExport()
+		if viewKind(n.Sub) {
+			filtered := items[:0]
+			for _, item := range items {
+				switch item.ID {
+				case "table.insert", "table.insertrow", "table.import", "table.manage":
+					continue
+				}
+				filtered = append(filtered, item)
+			}
+			items = filtered
+		}
+		return items
+	}
+}
+
+// viewKind reports whether a sidebar table node is a view, which does not
+// support INSERT/import or table DDL.
+func viewKind(sub string) bool {
+	switch strings.ToLower(sub) {
+	case "view", "materialized view":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1904,6 +2126,8 @@ func (m *Model) runNodeMenuAction(msg menu.ActionMsg) tea.Cmd {
 	case "db.close":
 		m.closeSession(n.SessionName)
 		return nil
+	case "db.createtable":
+		return m.openCreateTableForm(n.SessionName)
 	}
 	return nil
 }
@@ -1942,6 +2166,12 @@ func (m *Model) closeSession(name string) {
 func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 	schema, table := m.menuNode.Schema, m.menuNode.Table
 	kind := m.menuNode.Sub
+	if strings.HasPrefix(msg.ID, "table.dropcolumn.") {
+		return m.confirmDropColumn(schema, table, strings.TrimPrefix(msg.ID, "table.dropcolumn."))
+	}
+	if strings.HasPrefix(msg.ID, "table.dropindex.") {
+		return m.confirmDropIndex(schema, table, strings.TrimPrefix(msg.ID, "table.dropindex."))
+	}
 	if strings.HasPrefix(msg.ID, "table.export.") {
 		return m.exportTableCmd(schema, table, strings.TrimPrefix(msg.ID, "table.export."))
 	}
@@ -1973,6 +2203,27 @@ func (m *Model) runTableMenuAction(msg menu.ActionMsg) tea.Cmd {
 		return m.openIndexes(schema, table)
 	case "table.insert":
 		return m.editInfoCmd(schema, table, "insert")
+	case "table.insertrow":
+		return m.editInfoCmd(schema, table, "rowform")
+	case "table.import":
+		return m.editInfoCmd(schema, table, "import")
+	case "table.manage":
+		m.openManageMenu(schema, table)
+		return nil
+	case "table.droptable":
+		return m.confirmDropTable(schema, table)
+	case "table.truncate":
+		return m.confirmTruncateTable(schema, table)
+	case "table.rename":
+		return m.openRenameTableForm(schema, table)
+	case "table.addcolumn":
+		return m.openAddColumnForm(schema, table)
+	case "table.dropcolumn":
+		return m.editInfoCmd(schema, table, "dropcolumnmenu")
+	case "table.createindex":
+		return m.openCreateIndexForm(schema, table)
+	case "table.dropindex":
+		return m.openDropIndexMenu(schema, table)
 	}
 	return nil
 }
@@ -2033,7 +2284,7 @@ func (m *Model) exportCmd(kind string) tea.Cmd {
 		m.setStatus(m.t.T(i18n.KeyStatusNoResults), true)
 		return nil
 	}
-	name := fmt.Sprintf("bdb-export-%s.%s", time.Now().Format("20060102-150405.000000000"), kind)
+	name := fmt.Sprintf("dbrix-export-%s.%s", time.Now().Format("20060102-150405.000000000"), kind)
 	path := filepath.Join(m.outDir, name)
 	return func() tea.Msg {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
@@ -2180,6 +2431,9 @@ func (m *Model) switchToConnection(name string) tea.Cmd {
 	if name == m.connName {
 		return nil
 	}
+	if name != m.pendingCreateTable {
+		m.pendingCreateTable = ""
+	}
 	if saved, ok := m.sessions[name]; ok {
 		m.saveCurrentSession()
 		m.activateSession(name, saved)
@@ -2307,9 +2561,11 @@ func (m *Model) closeOverlays() {
 	m.cellEdit.Close()
 	m.confirm.Close()
 	m.dirInput.Close()
+	m.form.Close()
 	m.completion.Close()
 	m.showHelp = false
 	m.pendingCmd = nil
+	m.pendingImport = nil
 }
 
 func (m *Model) menuItems() []menu.Item {

@@ -8,11 +8,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/LinduanTof/b-db/internal/config"
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/ui/textutil"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	"github.com/LinduanTof/dbrix/internal/config"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/ui/textutil"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 type NodeKind int
@@ -783,6 +783,31 @@ func (m *Model) CursorPath() string {
 // match yet is kept, because table and column nodes load asynchronously.
 func (m *Model) RestoreCursor(path string) {
 	m.pendingCursor = path
+}
+
+// ReloadSession reloads the database node that owns a session, which refreshes
+// its table list after a schema change. It falls back to the connection root
+// when the session is not open as a separate node.
+func (m *Model) ReloadSession(session string) tea.Cmd {
+	var find func(nodes []*Node) *Node
+	find = func(nodes []*Node) *Node {
+		for _, n := range nodes {
+			switch {
+			case n.Kind == KindDatabase && n.SessionName == session:
+				return n
+			case n.Kind == KindConnection && n.ConnName == session:
+				return n
+			}
+			if found := find(n.Children); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	if n := find(m.roots); n != nil {
+		return m.reload(n)
+	}
+	return nil
 }
 
 // ReloadSelected reloads the selected node, if it belongs to the current

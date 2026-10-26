@@ -9,10 +9,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/LinduanTof/b-db/internal/config"
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/ui/textutil"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	"github.com/LinduanTof/dbrix/internal/config"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/ui/textutil"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 type SubmittedMsg struct {
@@ -105,6 +105,24 @@ func (m *Model) Open() {
 }
 
 func (m *Model) Close() { m.open = false }
+
+// Paste forwards pasted text to the focused field.
+func (m *Model) Paste(msg tea.PasteMsg) tea.Cmd {
+	if !m.open {
+		return nil
+	}
+	visible := m.visibleFields()
+	if len(visible) == 0 {
+		return nil
+	}
+	current := visible[min(max(m.focus, 0), len(visible)-1)]
+	if current.kind == fieldType {
+		return nil
+	}
+	var cmd tea.Cmd
+	current.input, cmd = current.input.Update(msg)
+	return cmd
+}
 
 func (m Model) IsOpen() bool { return m.open }
 

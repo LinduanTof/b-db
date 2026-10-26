@@ -7,8 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/i18n"
 )
 
 func sample(rows int) *db.ResultSet {
@@ -365,5 +365,61 @@ func TestRowModeDisablesColumnSelection(t *testing.T) {
 	row, col := m.CursorPosition()
 	if row != 1 || col != 0 {
 		t.Fatalf("cursor = (%d, %d), want (1, 0)", row, col)
+	}
+}
+
+func TestFilterRows(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 12)
+	m.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "name"}, {Name: "note"}},
+		Rows: [][]any{
+			{"alice", "vip"},
+			{"bob", "inactive"},
+			{"alicia", "vip"},
+		},
+	})
+	m.SetFilter("vip")
+	if len(m.visible) != 2 {
+		t.Fatalf("visible = %v, want 2 rows", m.visible)
+	}
+	if got := m.CursorCell(); got != "alice" {
+		t.Fatalf("cursor cell = %q, want alice", got)
+	}
+	m.cursorRow = 1
+	if got := m.CursorCell(); got != "alicia" {
+		t.Fatalf("cursor cell = %q, want alicia", got)
+	}
+	if _, ok := m.RowKey([]string{"name"}); !ok {
+		t.Fatal("row key should map through the filter")
+	}
+	if rs := m.OrderedResult(); len(rs.Rows) != 2 || rs.Rows[1][0] != "alicia" {
+		t.Fatalf("ordered result should only contain visible rows: %#v", rs.Rows)
+	}
+	if !strings.Contains(m.View(), "2/3") {
+		t.Fatalf("footer should show the filter count:\n%s", m.View())
+	}
+
+	m.SetFilter("")
+	if len(m.visible) != 3 {
+		t.Fatalf("clearing the filter should restore rows: %v", m.visible)
+	}
+}
+
+func TestFilterSurvivesSort(t *testing.T) {
+	m := New(i18n.New("en"))
+	m.SetSize(60, 12)
+	m.SetResult(&db.ResultSet{
+		Columns: []db.ColumnMeta{{Name: "name"}},
+		Rows:    [][]any{{"b"}, {"a"}, {"c"}},
+	})
+	m.SetFilter("a")
+	m.cursorCol = 0
+	m.toggleSort()
+	if len(m.visible) != 1 || m.visible[0] != 1 {
+		t.Fatalf("visible = %v, want [1]", m.visible)
+	}
+	if got := m.CursorCell(); got != "a" {
+		t.Fatalf("cursor cell = %q, want a", got)
 	}
 }

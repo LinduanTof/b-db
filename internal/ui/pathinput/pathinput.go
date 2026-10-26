@@ -7,9 +7,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/ui/textutil"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/ui/textutil"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 type Model struct {
@@ -48,6 +48,16 @@ func (m *Model) Open(value string) {
 func (m *Model) Close() {
 	m.open = false
 	m.input.Blur()
+}
+
+// Paste forwards pasted text to the path input.
+func (m *Model) Paste(msg tea.PasteMsg) tea.Cmd {
+	if !m.open {
+		return nil
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
 }
 
 func (m Model) IsOpen() bool { return m.open }

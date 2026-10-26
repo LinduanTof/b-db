@@ -21,7 +21,7 @@ connections:
     type: sqlite
     path: ./testdata/demo.db
 
-  # PostgreSQL example. ${PG_PASSWORD} must be set before starting bdb;
+  # PostgreSQL example. ${PG_PASSWORD} must be set before starting dbrix;
   # a missing variable is reported as an error instead of silently using "".
   # PostgreSQL (supported). database is optional and defaults to "postgres";
   # all databases are still listed in the sidebar after connecting.
@@ -31,7 +31,7 @@ connections:
   #   port: 5432
   #   user: postgres
   #   password: ${PG_PASSWORD}
-  #   database: bdb
+  #   database: dbrix
   #   sslmode: disable
 
   # MySQL / MariaDB (supported). Uncomment and set MYSQL_PASSWORD in the environment.
@@ -39,9 +39,9 @@ connections:
   #   type: mysql
   #   host: 127.0.0.1
   #   port: 3306
-  #   user: bdb
+  #   user: dbrix
   #   password: ${MYSQL_PASSWORD}
-  #   database: bdb
+  #   database: dbrix
 
   # Redis / MongoDB
   # - name: cache

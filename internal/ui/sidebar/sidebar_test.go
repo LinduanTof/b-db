@@ -7,9 +7,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/LinduanTof/b-db/internal/config"
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/config"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/i18n"
 )
 
 type fakeConn struct {
@@ -23,20 +23,20 @@ func (f fakeConn) Type() string { return f.typ }
 
 func TestPostgresDatabaseTree(t *testing.T) {
 	m := New([]config.Connection{
-		{Name: "pg", Type: config.TypePostgres, Database: "bdb", Host: "h", User: "u"},
+		{Name: "pg", Type: config.TypePostgres, Database: "dbrix", Host: "h", User: "u"},
 	}, i18n.New("en"))
 	m.SetSize(40, 12)
 	m.SetDatabases("pg", []DatabaseEntry{
-		{Name: "bdb", Session: "pg"},
+		{Name: "dbrix", Session: "pg"},
 		{Name: "postgres", Session: "pg/postgres"},
 	})
 	m.SetActiveSessions([]string{"pg", "pg/postgres"})
-	if cmd := m.SetDatabaseConn(fakeConn{name: "pg", typ: config.TypePostgres}, "pg", "bdb", "pg"); cmd == nil {
+	if cmd := m.SetDatabaseConn(fakeConn{name: "pg", typ: config.TypePostgres}, "pg", "dbrix", "pg"); cmd == nil {
 		t.Fatal("selecting a database should load its schemas")
 	}
 
 	view := ansi.Strip(m.View())
-	for _, want := range []string{"▾ ● ▤ bdb", "▸ ◉ ▤ postgres", "2 active"} {
+	for _, want := range []string{"▾ ● ▤ dbrix", "▸ ◉ ▤ postgres", "2 active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -168,8 +168,8 @@ func TestMySQLDatabaseTree(t *testing.T) {
 func TestNoConnectionsShowsConfigPath(t *testing.T) {
 	m := New(nil, i18n.New("en"))
 	m.SetSize(80, 10)
-	m.SetConfigPath("/tmp/bdb/config.yaml")
-	if view := m.View(); !strings.Contains(view, "/tmp/bdb/config.yaml") {
+	m.SetConfigPath("/tmp/dbrix/config.yaml")
+	if view := m.View(); !strings.Contains(view, "/tmp/dbrix/config.yaml") {
 		t.Fatalf("view:\n%s", view)
 	}
 }

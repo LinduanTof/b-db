@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/LinduanTof/b-db/internal/db/dialect"
+	"github.com/LinduanTof/dbrix/internal/db/dialect"
 )
 
 func TestSQLiteVersion(t *testing.T) {
