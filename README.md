@@ -2,15 +2,46 @@
 
 **English** | [简体中文](README.zh.md)
 
+[![CI](https://github.com/LinduanTof/b-db/actions/workflows/go.yml/badge.svg)](https://github.com/LinduanTof/b-db/actions/workflows/go.yml)
+[![Release](https://img.shields.io/github/v/release/LinduanTof/b-db)](https://github.com/LinduanTof/b-db/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/LinduanTof/b-db)](go.mod)
+[![License](https://img.shields.io/github/license/LinduanTof/b-db)](LICENSE)
+
 A modern database client for the Linux terminal, built with Go and [Bubble Tea v2](https://github.com/charmbracelet/bubbletea). It aims to keep connection management, schema browsing, SQL editing, data editing and export inside a single terminal window.
 
 Implemented: PostgreSQL/MySQL/SQLite browsing and queries, transactional cell editing, Redis/MongoDB, multiple sessions, table structure/DDL/indexes, CSV/JSON/Markdown export, SQL file execution, query history, 6 themes, SQL syntax highlighting and autocomplete, focus layouts and mouse support.
 
 ## Screenshots
 
+![bdb demo](docs/images/en/demo.gif)
+
 ![bdb main window](docs/images/en/01-main.png)
 
 Browse databases and tables in the sidebar, write SQL in the editor and inspect editable results. Each section below includes a screenshot taken from a real run.
+
+## How bdb compares
+
+bdb focuses on breadth (SQL and NoSQL in one TUI), safe edits and zero-dependency distribution.
+
+| Database | bdb | [lazysql](https://github.com/jorgerojas26/lazysql) | [rainfrog](https://github.com/achristmascarl/rainfrog) | [harlequin](https://github.com/tconbeer/harlequin) | [dblab](https://github.com/danvergara/dblab) |
+|---|:-:|:-:|:-:|:-:|:-:|
+| PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MySQL / MariaDB | ✅ | ✅ | ✅ | ✅ | ✅ |
+| SQLite | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Redis | ✅ | – | – | – | – |
+| MongoDB | ✅ | – | – | – | – |
+| Oracle | – | – | ✅ | – | ✅ |
+| SQL Server | – | ✅ | – | ✅ | ✅ |
+| DuckDB / Snowflake | – | – | – | ✅ | – |
+
+What bdb adds on top of the basics:
+
+- **One binary, five databases**: SQL and NoSQL sessions share the same editor, result grid and history.
+- **Safe cell editing**: `UPDATE`/`DELETE` previews plus transactional execution that must touch exactly one row.
+- **Four export formats**: streamed SQL, Excel, CSV and JSON; database-level export writes one file per table without loading it into memory.
+- **Terminal-native UX**: 6 themes, focus layouts, mouse support, CJK-aware layout and an English/Chinese UI.
+
+*Database coverage was checked against each project's public documentation in October 2026; see their docs for the latest.*
 
 ## Installation
 

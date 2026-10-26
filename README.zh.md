@@ -2,15 +2,46 @@
 
 [English](README.md) | **简体中文**
 
+[![CI](https://github.com/LinduanTof/b-db/actions/workflows/go.yml/badge.svg)](https://github.com/LinduanTof/b-db/actions/workflows/go.yml)
+[![Release](https://img.shields.io/github/v/release/LinduanTof/b-db)](https://github.com/LinduanTof/b-db/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/LinduanTof/b-db)](go.mod)
+[![License](https://img.shields.io/github/license/LinduanTof/b-db)](LICENSE)
+
 一款面向 Linux 终端的现代化数据库管理工具，使用 Go + [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) 构建。目标是在一个终端窗口内完成连接管理、库表浏览、SQL 编辑执行、数据编辑与导出。
 
 已完成：PostgreSQL/MySQL/SQLite 浏览与查询、事务化数据编辑、Redis/MongoDB、多会话、表结构/DDL/索引、CSV/JSON/Markdown 导出、SQL 文件执行、查询历史、6 套主题、SQL 语法高亮与自动补全、专注布局与鼠标操作。
 
 ## 界面预览
 
+![bdb 演示](docs/images/demo.gif)
+
 ![bdb 主界面](docs/images/01-main.png)
 
 连接后在侧栏浏览库表，在编辑器中写 SQL 并执行，结果以可编辑的网格展示。下文各章节还会给出对应的真实运行截图。
+
+## 与同类工具对比
+
+bdb 的侧重点是一个界面同时覆盖 SQL 与 NoSQL、事务化编辑以及零依赖分发。
+
+| 数据库 | bdb | [lazysql](https://github.com/jorgerojas26/lazysql) | [rainfrog](https://github.com/achristmascarl/rainfrog) | [harlequin](https://github.com/tconbeer/harlequin) | [dblab](https://github.com/danvergara/dblab) |
+|---|:-:|:-:|:-:|:-:|:-:|
+| PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MySQL / MariaDB | ✅ | ✅ | ✅ | ✅ | ✅ |
+| SQLite | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Redis | ✅ | – | – | – | – |
+| MongoDB | ✅ | – | – | – | – |
+| Oracle | – | – | ✅ | – | ✅ |
+| SQL Server | – | ✅ | – | ✅ | ✅ |
+| DuckDB / Snowflake | – | – | – | ✅ | – |
+
+在基础能力之外，bdb 还提供：
+
+- **单二进制覆盖五类数据库**：SQL 与 NoSQL 会话共用编辑器、结果网格与查询历史
+- **安全的数据编辑**：预览 `UPDATE`/`DELETE`，在事务中执行且必须恰好影响一行
+- **四种导出格式**：流式 SQL、Excel、CSV、JSON；库级导出逐表写入，不把整表载入内存
+- **终端原生体验**：6 套主题、专注布局、鼠标操作、CJK 宽度对齐与中英双语界面
+
+*数据库覆盖范围依据各项目 2026 年 10 月的公开文档核对，最新情况请以各自文档为准。*
 
 ## 安装
 
