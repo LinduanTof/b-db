@@ -1,0 +1,20 @@
+# Maintainer: Filter <linduan4506@sina.cn>
+pkgname=bdb-bin
+pkgver=0.3.2
+pkgrel=1
+pkgdesc="Terminal database client for PostgreSQL, MySQL, SQLite, Redis and MongoDB"
+arch=('x86_64' 'aarch64')
+url="https://github.com/LinduanTof/b-db"
+license=('Apache-2.0')
+provides=('bdb')
+conflicts=('bdb')
+options=('!strip')
+source_x86_64=("${url}/releases/download/v${pkgver}/bdb_${pkgver}_linux_amd64.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/bdb_${pkgver}_linux_arm64.tar.gz")
+sha256sums_x86_64=('1f3d21014b26f2377695e31b3f8966b8129663874048405806644f6941ac476c')
+sha256sums_aarch64=('2e08293a50575c4a81dc391514c8188a1095a978a854c1b5cafa70ba2b814e68')
+
+package() {
+  install -Dm755 "${srcdir}/bdb" "${pkgdir}/usr/bin/bdb"
+  install -Dm644 "${srcdir}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

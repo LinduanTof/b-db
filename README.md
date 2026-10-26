@@ -45,9 +45,21 @@ What bdb adds on top of the basics:
 
 ## Installation
 
-Go 1.26+ is required.
+### Homebrew (Linux)
+
+```bash
+brew install LinduanTof/tap/bdb
+```
+
+Every [release](https://github.com/LinduanTof/b-db/releases) also ships prebuilt binaries.
+
+### Arch Linux (AUR)
+
+PKGBUILDs for `bdb-bin` (prebuilt) and `bdb` (built from source) live in [`packaging/aur`](packaging/aur); see the README there for publishing to the AUR.
 
 ### go install
+
+Go 1.26+ is required.
 
 ```bash
 go install github.com/LinduanTof/b-db/cmd/bdb@latest

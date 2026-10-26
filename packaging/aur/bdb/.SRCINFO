@@ -1,0 +1,13 @@
+pkgbase = bdb
+	pkgdesc = Terminal database client for PostgreSQL, MySQL, SQLite, Redis and MongoDB
+	pkgver = 0.3.2
+	pkgrel = 1
+	url = https://github.com/LinduanTof/b-db
+	arch = x86_64
+	arch = aarch64
+	license = Apache-2.0
+	makedepends = go
+	source = https://github.com/LinduanTof/b-db/archive/refs/tags/v0.3.2.tar.gz
+	sha256sums = df764f6e09dda0683f5a8bed885bb01494b2c52cc5be475a8efa9831a90b6931
+
+pkgname = bdb

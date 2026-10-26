@@ -45,9 +45,21 @@ bdb 的侧重点是一个界面同时覆盖 SQL 与 NoSQL、事务化编辑以�
 
 ## 安装
 
-要求 Go 1.26+。
+### Homebrew(Linux)
+
+```bash
+brew install LinduanTof/tap/bdb
+```
+
+每个 [Release](https://github.com/LinduanTof/b-db/releases) 也附带预编译二进制。
+
+### Arch Linux(AUR)
+
+`bdb-bin`(预编译)与 `bdb`(源码构建)的 PKGBUILD 位于 [`packaging/aur`](packaging/aur)，推送步骤见该目录的 README。
 
 ### go install
+
+要求 Go 1.26+。
 
 ```bash
 go install github.com/LinduanTof/b-db/cmd/bdb@latest
