@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, body string) string {
@@ -230,5 +231,25 @@ func TestEffectivePort(t *testing.T) {
 		if got := (Connection{Type: typ}).EffectivePort(); got != want {
 			t.Errorf("EffectivePort(%s) = %d, want %d", typ, got, want)
 		}
+	}
+}
+
+func TestTimeoutUnlimited(t *testing.T) {
+	path := writeConfig(t, "query:\n  timeout: unlimited\nconnections: []\n")
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Query.Timeout.Std() >= 0 {
+		t.Fatalf("timeout = %s, want unlimited", cfg.Query.Timeout.Std())
+	}
+
+	path = writeConfig(t, "connections: []\n")
+	cfg, _, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Query.Timeout.Std(); got != 30*time.Second {
+		t.Fatalf("default timeout = %s, want 30s", got)
 	}
 }

@@ -113,7 +113,7 @@ func TestEscOpensOptionsMenu(t *testing.T) {
 		t.Fatal("esc should open the options menu")
 	}
 	content := m.View().Content
-	for _, want := range []string{"Options", "ACTIONS", "SETTINGS", "Theme", "Language"} {
+	for _, want := range []string{"Options", "Actions", "Settings", "add a new data source"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("menu missing %q:\n%s", want, content)
 		}
@@ -182,9 +182,7 @@ func TestOptionsMenu(t *testing.T) {
 	defer theme.Set("default")
 
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 6; i++ {
-		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
 	if theme.Current() != "catppuccin" {
 		t.Fatalf("theme = %q, want catppuccin", theme.Current())
@@ -989,21 +987,6 @@ func TestAutoFocusLayout(t *testing.T) {
 	}
 }
 
-func TestMenuFocusLayout(t *testing.T) {
-	m := testModel(t, "en")
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 11; i++ {
-		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	}
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.zoom {
-		t.Fatal("menu action should enable focused layout")
-	}
-	if m.options.IsOpen() {
-		t.Fatal("menu should close after the action")
-	}
-}
-
 func TestMouseClickZoomResults(t *testing.T) {
 	m := testModel(t, "en")
 	m = connect(t, m)
@@ -1248,7 +1231,8 @@ func TestSessionSwitchCancelsMutation(t *testing.T) {
 func TestMenuSettings(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 8; i++ {
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	for i := 0; i < 2; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
@@ -2241,5 +2225,63 @@ func TestMenuMouseClickOutsideCloses(t *testing.T) {
 	m = model.(*Model)
 	if m.options.IsOpen() {
 		t.Fatal("click outside should close the menu")
+	}
+}
+
+func TestExportDirSetting(t *testing.T) {
+	m := testModel(t, "en")
+	m = connect(t, m)
+	defer func() {
+		if m.conn != nil {
+			m.conn.Close()
+		}
+	}()
+	target := filepath.Join(t.TempDir(), "exports")
+	m.applyExportDir(target)
+	if m.outDir != target {
+		t.Fatalf("outDir = %q", m.outDir)
+	}
+	if saved, ok := config.LoadExportDirState(); !ok || saved != target {
+		t.Fatalf("state = %q ok=%v", saved, ok)
+	}
+
+	m = runCmd(t, m, m.exportTableCmd("main", "users", "sql"))
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("exported files = %d, want 1", len(entries))
+	}
+}
+
+func TestExportDirMenuOpens(t *testing.T) {
+	m := testModel(t, "en")
+	m.runMenuAction(menu.ActionMsg{ID: "exportdir"})
+	if !m.dirInput.IsOpen() {
+		t.Fatal("export directory input should open")
+	}
+}
+
+func TestUnlimitedTimeout(t *testing.T) {
+	m := testModel(t, "en")
+	m.applyMenuChange(menu.ChangedMsg{ID: "timeout", Value: 5})
+	if got := m.cfg.Query.Timeout.Std(); got != 0 {
+		t.Fatalf("timeout = %s, want unlimited", got)
+	}
+	if !strings.Contains(m.status, m.t.T(i18n.KeyMenuUnlimited)) {
+		t.Fatalf("status = %q", m.status)
+	}
+	ctx, cancel := m.queryContext()
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("unlimited query context should have no deadline")
+	}
+
+	m.cfg.Query.Timeout = config.Duration(5 * time.Second)
+	timed, end := m.queryContext()
+	defer end()
+	if _, ok := timed.Deadline(); !ok {
+		t.Fatal("timed query context should have a deadline")
 	}
 }

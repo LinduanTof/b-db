@@ -32,6 +32,7 @@ import (
 	"github.com/LinduanTof/b-db/internal/ui/detail"
 	"github.com/LinduanTof/b-db/internal/ui/editor"
 	"github.com/LinduanTof/b-db/internal/ui/menu"
+	"github.com/LinduanTof/b-db/internal/ui/pathinput"
 	"github.com/LinduanTof/b-db/internal/ui/results"
 	"github.com/LinduanTof/b-db/internal/ui/sidebar"
 	"github.com/LinduanTof/b-db/internal/ui/statusbar"
@@ -203,6 +204,7 @@ type Model struct {
 	connForm   connection.Model
 	cellEdit   celledit.Model
 	confirm    confirm.Model
+	dirInput   pathinput.Model
 
 	pendingCmd tea.Cmd
 	pager      *pagination
@@ -325,6 +327,7 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.connForm = connection.New(t)
 	m.cellEdit = celledit.New(t)
 	m.confirm = confirm.New(t)
+	m.dirInput = pathinput.New(t)
 	m.editCache = map[string]editInfo{}
 	m.completer = ac.New()
 	m.tableSchemas = map[string]string{}
@@ -332,8 +335,15 @@ func New(cfg *config.Config, t *i18n.Translator) *Model {
 	m.filterInput = textinput.New()
 	m.filterInput.Prompt = ""
 	m.filterInput.CharLimit = 64
-	if wd, err := os.Getwd(); err == nil {
-		m.outDir = wd
+	if saved, ok := config.LoadExportDirState(); ok {
+		m.outDir = saved
+	} else {
+		m.outDir = cfg.UI.ExportDir
+	}
+	if m.outDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			m.outDir = wd
+		}
 	}
 	return m
 }
@@ -352,6 +362,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.connForm.SetSize(msg.Width, msg.Height)
 		m.cellEdit.SetSize(msg.Width, msg.Height)
 		m.confirm.SetSize(msg.Width, msg.Height)
+		m.dirInput.SetSize(msg.Width, msg.Height)
 		m.layout()
 		return m, nil
 	case tea.KeyPressMsg:
@@ -463,6 +474,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleDatabasesLoaded(msg)
 	case celledit.SubmittedMsg:
 		return m, m.openUpdateConfirm(msg.Value)
+	case pathinput.SubmittedMsg:
+		m.applyExportDir(msg.Value)
+		return m, nil
 	case confirm.ConfirmedMsg:
 		cmd := m.pendingCmd
 		m.pendingCmd = nil
@@ -671,7 +685,7 @@ func (m *Model) handleMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 func (m *Model) anyOverlayOpen() bool {
 	return m.options.IsOpen() || m.tableMenu.IsOpen() || m.textView.IsOpen() ||
 		m.detail.IsOpen() || m.connForm.IsOpen() || m.cellEdit.IsOpen() ||
-		m.confirm.IsOpen() || m.completion.IsOpen() || m.showHelp
+		m.confirm.IsOpen() || m.completion.IsOpen() || m.dirInput.IsOpen() || m.showHelp
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -696,6 +710,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		var cmd tea.Cmd
 		m.tableMenu, cmd = m.tableMenu.Update(msg)
+		return cmd
+	}
+	if m.dirInput.IsOpen() {
+		var cmd tea.Cmd
+		m.dirInput, cmd = m.dirInput.Update(msg)
 		return cmd
 	}
 	if m.textView.IsOpen() {
@@ -769,7 +788,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		m.completion.Close()
-		m.options.Open("", m.menuItems())
+		m.options.OpenTabs("", []string{
+			m.t.T(i18n.KeyMenuTabActions),
+			m.t.T(i18n.KeyMenuTabSettings),
+		}, m.menuItems())
 		return nil
 	}
 	if key == "f2" {
@@ -1147,6 +1169,15 @@ func (m *Model) runTableCommand(stmt string) tea.Cmd {
 	return m.runStatement(stmt, false, max(1, m.cfg.Query.MaxRows))
 }
 
+// queryContext returns a context honoring query.timeout. A non-positive
+// timeout disables the client-side deadline.
+func (m *Model) queryContext() (context.Context, context.CancelFunc) {
+	if timeout := m.cfg.Query.Timeout.Std(); timeout > 0 {
+		return context.WithTimeout(context.Background(), timeout)
+	}
+	return context.WithCancel(context.Background())
+}
+
 // runStatement uses a zero maxRows for an unlimited editor query. Table
 // browsing passes query.max_rows explicitly.
 func (m *Model) runStatement(stmt string, recordHistory bool, maxRows int) tea.Cmd {
@@ -1164,7 +1195,7 @@ func (m *Model) runStatement(stmt string, recordHistory bool, maxRows int) tea.C
 	}
 	m.querySeq++
 	id := m.querySeq
-	ctx, cancel := context.WithTimeout(context.Background(), m.cfg.Query.Timeout.Std())
+	ctx, cancel := m.queryContext()
 	m.cancel = cancel
 	m.running = true
 	var store *history.Store
@@ -1446,9 +1477,8 @@ func (m *Model) versionCmd() tea.Cmd {
 	}
 	m.versionSeq++
 	id := m.versionSeq
-	timeout := m.cfg.Query.Timeout.Std()
+	ctx, cancel := m.queryContext()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		version, err := versioner.Version(ctx)
 		return versionLoadedMsg{id: id, version: version, err: err}
@@ -1488,9 +1518,8 @@ func (m *Model) loadOverviewCmd() tea.Cmd {
 	id := m.overviewSeq
 	conn := m.conn
 	typ := conn.Type()
-	timeout := m.cfg.Query.Timeout.Std()
+	ctx, cancel := m.queryContext()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		rows, err := overviewRows(ctx, conn, typ, database)
 		return overviewLoadedMsg{id: id, rows: rows, err: err}
@@ -2042,10 +2071,11 @@ func (m *Model) runMenuAction(msg menu.ActionMsg) tea.Cmd {
 		return m.exportCmd("json")
 	case "export.md":
 		return m.exportCmd("md")
+	case "exportdir":
+		m.completion.Close()
+		m.dirInput.Open(m.outDir)
 	case "help":
 		m.showHelp = true
-	case "zoom":
-		m.toggleZoom()
 	case "quit":
 		m.shutdown()
 		return tea.Quit
@@ -2076,7 +2106,11 @@ func (m *Model) applyMenuChange(msg menu.ChangedMsg) {
 			return
 		}
 		m.cfg.Query.Timeout = config.Duration(values[msg.Value])
-		m.setStatus(m.t.T(i18n.KeyStatusTimeoutSet, values[msg.Value].String()), false)
+		label := values[msg.Value].String()
+		if values[msg.Value] <= 0 {
+			label = m.t.T(i18n.KeyMenuUnlimited)
+		}
+		m.setStatus(m.t.T(i18n.KeyStatusTimeoutSet, label), false)
 	case "maxrows":
 		values := maxRowChoices()
 		if msg.Value < 0 || msg.Value >= len(values) {
@@ -2272,6 +2306,7 @@ func (m *Model) closeOverlays() {
 	m.connForm.Close()
 	m.cellEdit.Close()
 	m.confirm.Close()
+	m.dirInput.Close()
 	m.completion.Close()
 	m.showHelp = false
 	m.pendingCmd = nil
@@ -2292,11 +2327,14 @@ func (m *Model) menuItems() []menu.Item {
 		langValue = 1
 	}
 	timeouts := timeoutChoices()
-	timeoutValue := 0
+	timeoutValue := len(timeouts) - 1
 	currentTimeout := m.cfg.Query.Timeout.Std()
-	for i, d := range timeouts {
-		if d <= currentTimeout {
-			timeoutValue = i
+	if currentTimeout > 0 {
+		timeoutValue = 0
+		for i, d := range timeouts {
+			if d > 0 && d <= currentTimeout {
+				timeoutValue = i
+			}
 		}
 	}
 	rows := maxRowChoices()
@@ -2317,22 +2355,16 @@ func (m *Model) menuItems() []menu.Item {
 	}
 
 	return []menu.Item{
-		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuActions},
 		{ID: "add", LabelKey: i18n.KeyCmdAdd, Kind: menu.KindAction},
 		{ID: "disconnect", LabelKey: i18n.KeyCmdDisconnect, Kind: menu.KindAction},
-		{ID: "export.csv", LabelKey: i18n.KeyMenuExportCSV, Kind: menu.KindAction},
-		{ID: "export.json", LabelKey: i18n.KeyMenuExportJSON, Kind: menu.KindAction},
-		{ID: "export.md", LabelKey: i18n.KeyMenuExportMarkdown, Kind: menu.KindAction},
 		{ID: "help", LabelKey: i18n.KeyCmdHelp, Kind: menu.KindAction},
-		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuSettings},
-		{ID: "theme", LabelKey: i18n.KeyMenuTheme, Kind: menu.KindChoice, Choices: themes, Value: themeValue},
-		{ID: "lang", LabelKey: i18n.KeyMenuLanguage, Kind: menu.KindChoice, Choices: langs, Value: langValue},
-		{ID: "timeout", LabelKey: i18n.KeyMenuTimeout, Kind: menu.KindChoice, Choices: timeoutLabels(), Value: timeoutValue},
-		{ID: "maxrows", LabelKey: i18n.KeyMenuMaxRows, Kind: menu.KindChoice, Choices: maxRowLabels(), Value: rowValue},
-		{ID: "layout", LabelKey: i18n.KeyMenuLayoutMode, Kind: menu.KindChoice, Choices: m.layoutLabels(), Value: layoutValue},
-		{ID: "zoom", LabelKey: i18n.KeyMenuLayout, Kind: menu.KindAction},
-		{Kind: menu.KindHeader},
 		{ID: "quit", LabelKey: i18n.KeyCmdQuit, Kind: menu.KindAction},
+		{ID: "theme", LabelKey: i18n.KeyMenuTheme, Kind: menu.KindChoice, Choices: themes, Value: themeValue, Tab: 1},
+		{ID: "lang", LabelKey: i18n.KeyMenuLanguage, Kind: menu.KindChoice, Choices: langs, Value: langValue, Tab: 1},
+		{ID: "timeout", LabelKey: i18n.KeyMenuTimeout, Kind: menu.KindChoice, Choices: timeoutLabels(m.t), Value: timeoutValue, Tab: 1},
+		{ID: "maxrows", LabelKey: i18n.KeyMenuMaxRows, Kind: menu.KindChoice, Choices: maxRowLabels(), Value: rowValue, Tab: 1},
+		{ID: "layout", LabelKey: i18n.KeyMenuLayoutMode, Kind: menu.KindChoice, Choices: m.layoutLabels(), Value: layoutValue, Tab: 1},
+		{ID: "exportdir", LabelKey: i18n.KeyMenuExportDir, Kind: menu.KindAction, Tab: 1},
 	}
 }
 
@@ -2349,13 +2381,17 @@ func (m *Model) layoutLabels() []string {
 }
 
 func timeoutChoices() []time.Duration {
-	return []time.Duration{5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second}
+	return []time.Duration{5 * time.Second, 10 * time.Second, 30 * time.Second, 60 * time.Second, 120 * time.Second, 0}
 }
 
-func timeoutLabels() []string {
+func timeoutLabels(t *i18n.Translator) []string {
 	values := timeoutChoices()
 	out := make([]string, len(values))
 	for i, d := range values {
+		if d <= 0 {
+			out[i] = t.T(i18n.KeyMenuUnlimited)
+			continue
+		}
 		out[i] = d.String()
 	}
 	return out

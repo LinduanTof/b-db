@@ -58,6 +58,10 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	if err := node.Decode(&s); err != nil {
 		return err
 	}
+	if strings.EqualFold(strings.TrimSpace(s), "unlimited") {
+		*d = Duration(-1)
+		return nil
+	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
 		return fmt.Errorf("invalid duration %q: %w", s, err)
@@ -82,6 +86,7 @@ type UIConfig struct {
 	Theme     string `yaml:"theme"`
 	FocusMode string `yaml:"focus_mode"`
 	Layout    string `yaml:"layout"`
+	ExportDir string `yaml:"export_dir"`
 }
 
 type QueryConfig struct {
@@ -131,6 +136,7 @@ ui:
   theme: default
   focus_mode: manual
   layout: stacked   # stacked | columns | results-top
+  export_dir: ""    # defaults to the current working directory
 
 query:
   timeout: 30s
@@ -239,7 +245,7 @@ func (c *Config) applyDefaults() {
 		c.UI.FocusMode = FocusModeManual
 	}
 	c.UI.Layout = NormalizeLayout(c.UI.Layout)
-	if c.Query.Timeout <= 0 {
+	if c.Query.Timeout == 0 {
 		c.Query.Timeout = Duration(defaultTimeout)
 	}
 	if c.Query.MaxRows <= 0 {

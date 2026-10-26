@@ -183,3 +183,58 @@ func TestViewLinesShareWidth(t *testing.T) {
 		}
 	}
 }
+
+func tabbedMenu() Model {
+	m := New(i18n.New("en"))
+	m.SetSize(100, 30)
+	m.OpenTabs("", []string{"Actions", "Settings"}, []Item{
+		{ID: "add", LabelKey: i18n.KeyCmdAdd, Kind: KindAction},
+		{ID: "theme", LabelKey: i18n.KeyMenuTheme, Kind: KindChoice, Choices: []string{"default", "dracula"}, Tab: 1},
+	})
+	return m
+}
+
+func TestTabsSwitch(t *testing.T) {
+	m := tabbedMenu()
+	if m.tab != 0 || m.selected != 0 {
+		t.Fatalf("tab=%d selected=%d", m.tab, m.selected)
+	}
+	if !strings.Contains(m.View(), "Actions") || !strings.Contains(m.View(), "Settings") {
+		t.Fatalf("missing tabs:\n%s", m.View())
+	}
+	if !strings.Contains(m.View(), "add a new data source") || strings.Contains(m.View(), "Theme") {
+		t.Fatalf("actions tab content wrong:\n%s", m.View())
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.tab != 1 || m.selected != 1 {
+		t.Fatalf("after tab: tab=%d selected=%d", m.tab, m.selected)
+	}
+	if !strings.Contains(m.View(), "Theme") || strings.Contains(m.View(), "add a new data source") {
+		t.Fatalf("settings tab content wrong:\n%s", m.View())
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.tab != 0 {
+		t.Fatalf("tab = %d, want 0", m.tab)
+	}
+}
+
+func TestClickTab(t *testing.T) {
+	m := tabbedMenu()
+	lines := strings.Split(m.View(), "\n")
+	modalW := 0
+	for _, line := range lines {
+		modalW = max(modalW, ansi.StringWidth(line))
+	}
+	x0 := max(0, (100-modalW)/2)
+	y0 := max(0, (30-len(lines))/2)
+	span := m.tabRanges[1]
+	x := x0 + 2 + span[0] + 1
+	y := y0 + 1 + m.tabLine
+
+	model, _ := m.HandleClick(x, y, 100, 30)
+	if model.tab != 1 {
+		t.Fatalf("tab = %d, want 1", model.tab)
+	}
+}

@@ -39,9 +39,9 @@ go test ./...     # 需要 testdata/demo.db 已经存在
 根 `Model` 位于 `internal/app/model.go`(约 1600 行),持有所有子模型、焦点状态、浮层、会话、连接与查询编排;渲染/布局在 `render.go`,编辑与变更流程在 `edit.go`。
 
 - `Update` 将 `tea.WindowSizeMsg` 分发给所有浮层并调用 `layout()`,按键交给 `handleKey`,鼠标事件单独处理,自定义消息交给对应处理器。未识别的消息最终落到 `editor.Update`。
-- 浮层优先级在三个地方重复维护:`handleKey`、`render()`、`anyOverlayOpen()`。顺序为:选项菜单、表操作菜单、文本查看器、结构详情、连接表单、单元格编辑、确认框、帮助。新增模态框时必须同时接入这三处,以及 `layout()`/`SetSize` 和 `closeOverlays()`。
+- 浮层优先级在三个地方重复维护:`handleKey`、`render()`、`anyOverlayOpen()`。顺序为:选项菜单、表操作菜单、导出目录输入、文本查看器、结构详情、连接表单、单元格编辑、确认框、帮助。新增模态框时必须同时接入这三处,以及 `layout()`/`SetSize` 和 `closeOverlays()`。
 - `View()` 返回 `tea.NewView(m.render())`,启用备用屏幕、单元格级鼠标事件和 Kitty 键盘增强协议(用于区分 `Ctrl+Enter` 与 `Enter`)。
-- 异步操作放在返回类型化消息的 `tea.Cmd` 闭包中(`connOpenedMsg`、`queryDoneMsg`、`tablePageDoneMsg`、`mutationDoneMsg` 等),处理器回到根模型执行。查询带 `querySeq` 序号,过期结果会被丢弃。
+- 异步操作放在返回类型化消息的 `tea.Cmd` 闭包中(`connOpenedMsg`、`queryDoneMsg`、`tablePageDoneMsg`、`mutationDoneMsg` 等),处理器回到根模型执行。查询带 `querySeq` 序号,过期结果会被丢弃。查询超时统一走 `Model.queryContext()`:`query.timeout` 为非正值(配置写 `unlimited`)时返回无 deadline 的 context,其余使用 `WithTimeout`;编辑器查询、分页、概览与版本查询共用该入口。
 - 表数据浏览与编辑器查询是两条独立路径:前者走 `pagination.go` 的 `runPageQuery`/`tablePageDoneMsg`,维护 `pagination` 并设置可编辑来源,不读写编辑器;后者走 `runQuery`/`queryDoneMsg`,只处理编辑器内容。两者共享结果面板,编辑器查询成功后会清除分页状态。
 - 侧栏 `↑`/`↓` 只移动光标,`Enter` 才激活节点。表节点激活(`sidebar.TableActivateMsg`)会新建或复用同名标签(`editorTab.source`)并预填 SQL,同时通过分页路径加载数据;`s` 只预览数据,`m` 打开当前节点(连接/数据库/表)的操作菜单(`sidebar.NodeMenuMsg`),`o` 只写入编辑器而不执行。连接根激活显示连接信息,数据库节点激活显示表概览,二者通过 `Model.context`(`contextInfo`/`contextTables`/`contextData`/`contextQuery`)决定结果面板标题、提示和 `r` 的行为。
 - 表概览原始数据保存在 `overviewAll`,客户端过滤词在 `overviewFilter`;`rebuildOverview` 子串匹配前三列后重新注入结果面板。切换会话或断开时必须调用 `resetOverviewState`,否则旧概览会串到新连接;`r` 重新加载后会自动重新应用过滤词。服务端版本异步加载,`versionSeq` 防止旧连接的版本覆盖当前面板。
@@ -65,7 +65,7 @@ func (m *Model) View() string
 ```
 
 模态组件额外提供 `Open`、`Close`、`IsOpen`。根模型使用 `*Model` 并原地修改;子模型通常返回值拷贝。浮层通过 `textutil.Overlay` 组合,支持 ANSI 样式和 CJK 宽度。
-- `menu` 同时服务选项菜单与节点菜单:粗线边框、标题嵌入顶部边框、分组标题带 `▎` 竖条并转为大写、选中行使用 `CellCursor` 整行色块、选项值右对齐、底部使用紧凑提示行。渲染由 `bodyLines` 统一生成,`itemLines` 记录条目在盒内的行号;`HandleClick` 测量 `View()` 的实际宽高并按 `Overlay` 的居中公式定位,再用「视图行 - 1(顶部边框)」映射条目,`click` 先选中、再次点击已选中项才调用 `activate`,避免误触操作。调整菜单结构时必须同步这个偏移。鼠标滚轮通过 `HandleWheel` 移动选中。
+- `menu` 同时服务选项菜单与节点菜单:粗线边框、标题嵌入顶部边框、分组标题带 `▎` 竖条并转为大写、选中行使用 `CellCursor` 整行色块、选项值右对齐、底部使用紧凑提示行。选项菜单通过 `OpenTabs` 分成「操作/设置」两个标签页,`Item.Tab` 指定归属,`Tab`/`Shift+Tab` 或点击标签切换(点击用 `tabRanges` 定位),渲染只显示当前标签的条目。渲染由 `bodyLines` 统一生成,`itemLines` 记录条目在盒内的行号(非当前标签为 -1);`HandleClick` 测量 `View()` 的实际宽高并按 `Overlay` 的居中公式定位,再用「视图行 - 1(顶部边框)」映射条目,`click` 先选中、再次点击已选中项才调用 `activate`,避免误触操作。调整菜单结构时必须同步这个偏移。鼠标滚轮通过 `HandleWheel` 移动选中。
 
 渲染规则:绝不能用 `len`/`utf8.RuneCountInString` 计算终端宽度。使用 `textutil.Width/Truncate/FitLine/FitLines`(底层为 `charmbracelet/x/ansi`),结果表格使用 `go-runewidth`。UI 测试通过 `ansi.StringWidth` 校验精确行数和单元格宽度。
 
@@ -78,7 +78,7 @@ func (m *Model) View() string
 - 只有从表视图打开、且表有主键的结果才允许编辑。SQL 写入在事务中执行,影响行数必须恰好为 1;预览 SQL 通过 dialect 生成。`read_only: true` 会在 app 层阻止单元格编辑和 SQL 写入语句,但这是保守的客户端检查,不能替代数据库侧的只读账号。
 - 可选能力通过接口断言实现,不要把它们加进 `Conn`:服务端版本用 `db.Versioner`,表统计用 `db.TableStatProvider`(PG/MySQL 实现,SQLite 返回 nil)。统计包含行数估算、大小、列数与表注释;失败只降级为 `-`,不影响表列表。
 - 大结果集导出必须用 `db.Streamer`/`db.RowStream`(SQL 驱动实现),不要用 `Querier.Query` 把整表载入内存。`RowStream` 是前向游标,调用方负责 `Close`;导出总超时 30 分钟,连接池上限为 4,库级导出逐表打开并在写完后立即关闭游标。XLSX 单 sheet 上限 1,048,575 行,超出返回错误。
-- 表/库节点菜单的导出由 `app/export_data.go` 编排:导出在 `tea.Cmd` 中后台执行,逐表读取 DDL 与流式数据。库级导出优先复用当前会话连接,其次复用 `sessions` 中的连接,否则临时 `db.Open` 并在结束后关闭。CSV 输出目录,SQL/JSON/Excel 单文件。XLSX 由 `internal/export/xlsx.go` 手写 OOXML,不引入第三方依赖。进度通过 `Model.SetSender` 注入的 `program.Send` 从后台推送 `exportProgressMsg`(表计数与每 10 万行行数),状态栏显示当前表与计数;测试中可直接注入回调。`exporting` 标志让状态栏显示进行中图标,`exportedMsg` 负责清除。
+- 表/库节点菜单的导出由 `app/export_data.go` 编排:导出在 `tea.Cmd` 中后台执行,逐表读取 DDL 与流式数据。`outDir` 来自 `ui.export_dir`,运行时可从选项菜单的导出目录输入框修改并写入状态文件;留空表示当前工作目录,写入前用 `MkdirAll` 确保目录存在。库级导出优先复用当前会话连接,其次复用 `sessions` 中的连接,否则临时 `db.Open` 并在结束后关闭。CSV 输出目录,SQL/JSON/Excel 单文件。XLSX 由 `internal/export/xlsx.go` 手写 OOXML,不引入第三方依赖。进度通过 `Model.SetSender` 注入的 `program.Send` 从后台推送 `exportProgressMsg`(表计数与每 10 万行行数),状态栏显示当前表与计数;测试中可直接注入回调。`exporting` 标志让状态栏显示进行中图标,`exportedMsg` 负责清除。
 - 表概览的原始行结构固定为 `schema/表名/类型/行数/大小/列数/注释`,`overviewAll` 与过滤都基于这个结构;渲染时 `typeHasSchema` 为 false 的连接(MySQL/MongoDB)去掉首列,避免重复展示数据库名。`contextTables` 下结果面板处于行选择模式(`results.SetRowMode`):左右键不移动列,`Enter`/`v` 通过 `openOverviewTable` 打开当前行表的数据预览。
 - Redis 支持 `SCAN 0 COUNT 50`、`GET "key"` 等命令;Mongo 支持 `find db.collection [json]`、`findOne`、`aggregate`、`count`。二者都不支持写入(`Mutator()` 返回 `nil`)。
 
@@ -91,6 +91,7 @@ func (m *Model) View() string
 | 查询历史 | `$XDG_STATE_HOME/bdb/history` |
 | 当前主题 | `$XDG_STATE_HOME/bdb/theme` |
 | 当前布局 | `$XDG_STATE_HOME/bdb/layout` |
+| 导出目录 | `$XDG_STATE_HOME/bdb/export_dir` |
 
 - `${ENV_VAR}` 展开适用于大多数连接字符串字段;变量缺失时会报错并指出连接名与字段,不会静默使用空字符串。
 - 运行时连接仅在主配置中不存在同名连接时才合并;新增数据源会保存原始 `${VAR}` 引用,但当前会话使用展开后的副本连接。
@@ -112,7 +113,7 @@ func (m *Model) View() string
 - 根模型测试通过 `tea.KeyPressMsg` 和 `internal/app/model_test.go` 中的辅助函数(`runCmd`、`sendKey`、`connect`)驱动 TUI,并断言渲染内容。新增交互测试时沿用这些辅助函数。
 - SQL 驱动测试使用临时 SQLite 数据库,无需 Docker 即可运行。Redis/Mongo 测试只覆盖解析和辅助函数。
 - 没有 golangci-lint 配置;声明的静态检查是 `go vet ./...`。
-- 面向用户的文案应放入 i18n 表;新增快捷键或菜单项时要同时补充中英文帮助文本。用户可见功能还需同步更新 `README.md` 和 `config.example.yaml`。
+- 面向用户的文案应放入 i18n 表;新增快捷键或菜单项时要同时补充中英文帮助文本。用户可见功能还需同步更新 `README.md`(英文)、`README.zh.md`(中文)和 `config.example.yaml`。
 
 ## 注意事项
 

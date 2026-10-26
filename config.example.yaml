@@ -8,8 +8,11 @@ ui:
   # stacked | columns | results-top: sidebar with stacked panes, three
   # columns, or the results pane above the editor
   layout: stacked
+  # default export directory; empty means the current working directory
+  # export_dir: /path/to/exports
 
 query:
+  # use "unlimited" to disable the client-side query timeout
   timeout: 30s
   max_rows: 1000   # table browsing page size; editor queries are unlimited
 
