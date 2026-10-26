@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/i18n"
 )
 
 func testForm(t *testing.T) Model {

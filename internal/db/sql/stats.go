@@ -5,7 +5,7 @@ import (
 	stdsql "database/sql"
 	"fmt"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 func (c *conn) Version(ctx context.Context) (string, error) {

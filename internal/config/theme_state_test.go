@@ -17,7 +17,7 @@ func TestThemeStateRoundTrip(t *testing.T) {
 	if got := LoadThemeState(); got != "dracula" {
 		t.Fatalf("state = %q", got)
 	}
-	info, err := os.Stat(filepath.Join(os.Getenv("XDG_STATE_HOME"), "bdb", "theme"))
+	info, err := os.Stat(filepath.Join(os.Getenv("XDG_STATE_HOME"), "dbrix", "theme"))
 	if err != nil {
 		t.Fatal(err)
 	}

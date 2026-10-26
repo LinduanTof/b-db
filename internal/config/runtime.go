@@ -15,13 +15,13 @@ type runtimeFile struct {
 
 func RuntimeConnectionsPath() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "bdb", "connections.yaml")
+		return filepath.Join(dir, "dbrix", "connections.yaml")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".local", "state", "bdb", "connections.yaml")
+		return filepath.Join(".local", "state", "dbrix", "connections.yaml")
 	}
-	return filepath.Join(home, ".local", "state", "bdb", "connections.yaml")
+	return filepath.Join(home, ".local", "state", "dbrix", "connections.yaml")
 }
 
 func loadRuntimeRaw() ([]Connection, error) {

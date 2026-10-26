@@ -5,8 +5,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	ac "github.com/LinduanTof/b-db/internal/complete"
-	"github.com/LinduanTof/b-db/internal/i18n"
+	ac "github.com/LinduanTof/dbrix/internal/complete"
+	"github.com/LinduanTof/dbrix/internal/i18n"
 )
 
 func TestViewAndAccept(t *testing.T) {

@@ -1,6 +1,6 @@
 /bin/
 /dist/
-/bdb-export-*
+/dbrix-export-*
 /testdata/demo.db
 
 .idea

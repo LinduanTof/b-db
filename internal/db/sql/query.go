@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 type querier struct{ c *conn }

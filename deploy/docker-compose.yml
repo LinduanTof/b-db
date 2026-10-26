@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: bdb
-      POSTGRES_PASSWORD: bdb
-      POSTGRES_DB: bdb
+      POSTGRES_USER: dbrix
+      POSTGRES_PASSWORD: dbrix
+      POSTGRES_DB: dbrix
     ports:
-      - "${BDB_PG_PORT:-5432}:5432"
+      - "${DBRIX_PG_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bdb -d bdb"]
+      test: ["CMD-SHELL", "pg_isready -U dbrix -d dbrix"]
       interval: 2s
       timeout: 3s
       retries: 20
@@ -17,14 +17,14 @@ services:
     image: mysql:8.0
     command: ["--default-authentication-plugin=mysql_native_password"]
     environment:
-      MYSQL_ROOT_PASSWORD: bdb
-      MYSQL_DATABASE: bdb
-      MYSQL_USER: bdb
-      MYSQL_PASSWORD: bdb
+      MYSQL_ROOT_PASSWORD: dbrix
+      MYSQL_DATABASE: dbrix
+      MYSQL_USER: dbrix
+      MYSQL_PASSWORD: dbrix
     ports:
-      - "${BDB_MYSQL_PORT:-3306}:3306"
+      - "${DBRIX_MYSQL_PORT:-3306}:3306"
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin status -h127.0.0.1 -ubdb -pbdb"]
+      test: ["CMD-SHELL", "mysqladmin status -h127.0.0.1 -udbrix -pdbrix"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -32,9 +32,9 @@ services:
   redis:
     image: redis:7
     ports:
-      - "${BDB_REDIS_PORT:-6379}:6379"
+      - "${DBRIX_REDIS_PORT:-6379}:6379"
 
   mongo:
     image: mongo:7
     ports:
-      - "${BDB_MONGO_PORT:-27017}:27017"
+      - "${DBRIX_MONGO_PORT:-27017}:27017"

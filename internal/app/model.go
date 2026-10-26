@@ -14,31 +14,31 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
-	ac "github.com/LinduanTof/b-db/internal/complete"
-	"github.com/LinduanTof/b-db/internal/config"
-	"github.com/LinduanTof/b-db/internal/db"
-	_ "github.com/LinduanTof/b-db/internal/db/mongo"
-	_ "github.com/LinduanTof/b-db/internal/db/redis"
-	_ "github.com/LinduanTof/b-db/internal/db/sql"
-	"github.com/LinduanTof/b-db/internal/export"
-	"github.com/LinduanTof/b-db/internal/history"
-	"github.com/LinduanTof/b-db/internal/i18n"
-	"github.com/LinduanTof/b-db/internal/query"
-	"github.com/LinduanTof/b-db/internal/sqlscript"
-	"github.com/LinduanTof/b-db/internal/ui/celledit"
-	uicomplete "github.com/LinduanTof/b-db/internal/ui/complete"
-	"github.com/LinduanTof/b-db/internal/ui/confirm"
-	"github.com/LinduanTof/b-db/internal/ui/connection"
-	"github.com/LinduanTof/b-db/internal/ui/detail"
-	"github.com/LinduanTof/b-db/internal/ui/editor"
-	"github.com/LinduanTof/b-db/internal/ui/form"
-	"github.com/LinduanTof/b-db/internal/ui/menu"
-	"github.com/LinduanTof/b-db/internal/ui/pathinput"
-	"github.com/LinduanTof/b-db/internal/ui/results"
-	"github.com/LinduanTof/b-db/internal/ui/sidebar"
-	"github.com/LinduanTof/b-db/internal/ui/statusbar"
-	"github.com/LinduanTof/b-db/internal/ui/textview"
-	"github.com/LinduanTof/b-db/internal/ui/theme"
+	ac "github.com/LinduanTof/dbrix/internal/complete"
+	"github.com/LinduanTof/dbrix/internal/config"
+	"github.com/LinduanTof/dbrix/internal/db"
+	_ "github.com/LinduanTof/dbrix/internal/db/mongo"
+	_ "github.com/LinduanTof/dbrix/internal/db/redis"
+	_ "github.com/LinduanTof/dbrix/internal/db/sql"
+	"github.com/LinduanTof/dbrix/internal/export"
+	"github.com/LinduanTof/dbrix/internal/history"
+	"github.com/LinduanTof/dbrix/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/query"
+	"github.com/LinduanTof/dbrix/internal/sqlscript"
+	"github.com/LinduanTof/dbrix/internal/ui/celledit"
+	uicomplete "github.com/LinduanTof/dbrix/internal/ui/complete"
+	"github.com/LinduanTof/dbrix/internal/ui/confirm"
+	"github.com/LinduanTof/dbrix/internal/ui/connection"
+	"github.com/LinduanTof/dbrix/internal/ui/detail"
+	"github.com/LinduanTof/dbrix/internal/ui/editor"
+	"github.com/LinduanTof/dbrix/internal/ui/form"
+	"github.com/LinduanTof/dbrix/internal/ui/menu"
+	"github.com/LinduanTof/dbrix/internal/ui/pathinput"
+	"github.com/LinduanTof/dbrix/internal/ui/results"
+	"github.com/LinduanTof/dbrix/internal/ui/sidebar"
+	"github.com/LinduanTof/dbrix/internal/ui/statusbar"
+	"github.com/LinduanTof/dbrix/internal/ui/textview"
+	"github.com/LinduanTof/dbrix/internal/ui/theme"
 )
 
 type focus int
@@ -591,7 +591,7 @@ func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle = "bdb"
+	v.WindowTitle = "dbrix"
 	// Lets terminals that support the Kitty keyboard protocol distinguish
 	// ctrl+enter from plain enter.
 	v.KeyboardEnhancements = tea.KeyboardEnhancements{
@@ -2284,7 +2284,7 @@ func (m *Model) exportCmd(kind string) tea.Cmd {
 		m.setStatus(m.t.T(i18n.KeyStatusNoResults), true)
 		return nil
 	}
-	name := fmt.Sprintf("bdb-export-%s.%s", time.Now().Format("20060102-150405.000000000"), kind)
+	name := fmt.Sprintf("dbrix-export-%s.%s", time.Now().Format("20060102-150405.000000000"), kind)
 	path := filepath.Join(m.outDir, name)
 	return func() tea.Msg {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)

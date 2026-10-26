@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LinduanTof/b-db/internal/db"
-	"github.com/LinduanTof/b-db/internal/db/dialect"
+	"github.com/LinduanTof/dbrix/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db/dialect"
 )
 
 // SQLStructure writes a single DDL statement with a trailing semicolon.

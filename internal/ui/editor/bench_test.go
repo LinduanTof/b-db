@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LinduanTof/b-db/internal/i18n"
+	"github.com/LinduanTof/dbrix/internal/i18n"
 )
 
 func BenchmarkView100Lines(b *testing.B) {

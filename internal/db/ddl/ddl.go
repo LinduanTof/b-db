@@ -1,4 +1,4 @@
-// Package ddl builds schema-changing statements for the SQL dialects bdb
+// Package ddl builds schema-changing statements for the SQL dialects dbrix
 // supports. Statements are plain text so the UI can preview exactly what will
 // run before executing it.
 package ddl
@@ -6,7 +6,7 @@ package ddl
 import (
 	"strings"
 
-	"github.com/LinduanTof/b-db/internal/db/dialect"
+	"github.com/LinduanTof/dbrix/internal/db/dialect"
 )
 
 func dialectFor(typ string) dialect.Dialect {

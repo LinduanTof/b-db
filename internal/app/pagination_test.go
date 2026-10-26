@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 func TestBuildPageStmt(t *testing.T) {
@@ -38,9 +38,9 @@ func TestBuildPageStmt(t *testing.T) {
 			want: `SELECT * FROM "users" ORDER BY "name" DESC, "id" LIMIT 2 OFFSET 0;`,
 		},
 		{
-			name: "mysql without order", typ: "mysql", schema: "bdb", table: "users",
+			name: "mysql without order", typ: "mysql", schema: "dbrix", table: "users",
 			offset: 10, size: 5,
-			want: "SELECT * FROM `bdb`.`users` LIMIT 5 OFFSET 10;",
+			want: "SELECT * FROM `dbrix`.`users` LIMIT 5 OFFSET 10;",
 		},
 	}
 	for _, tc := range cases {

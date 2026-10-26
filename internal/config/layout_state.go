@@ -8,13 +8,13 @@ import (
 
 func LayoutStatePath() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "bdb", "layout")
+		return filepath.Join(dir, "dbrix", "layout")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".local", "state", "bdb", "layout")
+		return filepath.Join(".local", "state", "dbrix", "layout")
 	}
-	return filepath.Join(home, ".local", "state", "bdb", "layout")
+	return filepath.Join(home, ".local", "state", "dbrix", "layout")
 }
 
 func LoadLayoutState() string {

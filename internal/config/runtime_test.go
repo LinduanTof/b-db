@@ -25,7 +25,7 @@ func TestRuntimeConnectionsRoundTrip(t *testing.T) {
 		t.Fatalf("loaded = %+v", loaded)
 	}
 
-	info, err := os.Stat(filepath.Join(os.Getenv("XDG_STATE_HOME"), "bdb", "connections.yaml"))
+	info, err := os.Stat(filepath.Join(os.Getenv("XDG_STATE_HOME"), "dbrix", "connections.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,8 +56,8 @@ func TestMergeRuntime(t *testing.T) {
 
 func TestRuntimeExpandsEnv(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("BDB_RT_PASSWORD", "secret")
-	conn := Connection{Name: "pg", Type: TypePostgres, Host: "h", User: "u", Database: "d", Password: "${BDB_RT_PASSWORD}"}
+	t.Setenv("DBRIX_RT_PASSWORD", "secret")
+	conn := Connection{Name: "pg", Type: TypePostgres, Host: "h", User: "u", Database: "d", Password: "${DBRIX_RT_PASSWORD}"}
 	if err := AppendRuntimeConnection(conn); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestRuntimeExpandsEnv(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw[0].Password != "${BDB_RT_PASSWORD}" {
+	if raw[0].Password != "${DBRIX_RT_PASSWORD}" {
 		t.Fatalf("raw password should stay unexpanded, got %q", raw[0].Password)
 	}
 }

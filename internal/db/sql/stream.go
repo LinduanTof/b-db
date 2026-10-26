@@ -4,7 +4,7 @@ import (
 	"context"
 	stdsql "database/sql"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 func (c *conn) Stream(ctx context.Context, stmt string, maxRows int) (db.RowStream, error) {

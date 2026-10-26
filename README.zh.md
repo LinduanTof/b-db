@@ -1,11 +1,11 @@
-# bdb
+# dbrix
 
 [English](README.md) | **简体中文**
 
-[![CI](https://github.com/LinduanTof/b-db/actions/workflows/go.yml/badge.svg)](https://github.com/LinduanTof/b-db/actions/workflows/go.yml)
-[![Release](https://img.shields.io/github/v/release/LinduanTof/b-db)](https://github.com/LinduanTof/b-db/releases)
-[![Go version](https://img.shields.io/github/go-mod/go-version/LinduanTof/b-db)](go.mod)
-[![License](https://img.shields.io/github/license/LinduanTof/b-db)](LICENSE)
+[![CI](https://github.com/LinduanTof/dbrix/actions/workflows/go.yml/badge.svg)](https://github.com/LinduanTof/dbrix/actions/workflows/go.yml)
+[![Release](https://img.shields.io/github/v/release/LinduanTof/dbrix)](https://github.com/LinduanTof/dbrix/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/LinduanTof/dbrix)](go.mod)
+[![License](https://img.shields.io/github/license/LinduanTof/dbrix)](LICENSE)
 
 一款面向 Linux 终端的现代化数据库管理工具，使用 Go + [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) 构建。目标是在一个终端窗口内完成连接管理、库表浏览、SQL 编辑执行、数据编辑与导出。
 
@@ -13,17 +13,17 @@
 
 ## 界面预览
 
-![bdb 演示](docs/images/demo.gif)
+![dbrix 演示](docs/images/demo.gif)
 
-![bdb 主界面](docs/images/01-main.png)
+![dbrix 主界面](docs/images/01-main.png)
 
 连接后在侧栏浏览库表，在编辑器中写 SQL 并执行，结果以可编辑的网格展示。下文各章节还会给出对应的真实运行截图。
 
 ## 与同类工具对比
 
-bdb 的侧重点是一个界面同时覆盖 SQL 与 NoSQL、事务化编辑以及零依赖分发。
+dbrix 的侧重点是一个界面同时覆盖 SQL 与 NoSQL、事务化编辑以及零依赖分发。
 
-| 数据库 | bdb | [lazysql](https://github.com/jorgerojas26/lazysql) | [rainfrog](https://github.com/achristmascarl/rainfrog) | [harlequin](https://github.com/tconbeer/harlequin) | [dblab](https://github.com/danvergara/dblab) |
+| 数据库 | dbrix | [lazysql](https://github.com/jorgerojas26/lazysql) | [rainfrog](https://github.com/achristmascarl/rainfrog) | [harlequin](https://github.com/tconbeer/harlequin) | [dblab](https://github.com/danvergara/dblab) |
 |---|:-:|:-:|:-:|:-:|:-:|
 | PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MySQL / MariaDB | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -34,7 +34,7 @@ bdb 的侧重点是一个界面同时覆盖 SQL 与 NoSQL、事务化编辑以�
 | SQL Server | – | ✅ | – | ✅ | ✅ |
 | DuckDB / Snowflake | – | – | – | ✅ | – |
 
-在基础能力之外，bdb 还提供：
+在基础能力之外，dbrix 还提供：
 
 - **单二进制覆盖五类数据库**：SQL 与 NoSQL 会话共用编辑器、结果网格与查询历史
 - **安全的数据编辑**：预览 `UPDATE`/`DELETE`，在事务中执行且必须恰好影响一行
@@ -48,51 +48,45 @@ bdb 的侧重点是一个界面同时覆盖 SQL 与 NoSQL、事务化编辑以�
 ### Homebrew(Linux)
 
 ```bash
-brew install LinduanTof/tap/bdb
+brew install LinduanTof/tap/dbrix
 ```
 
-每个 [Release](https://github.com/LinduanTof/b-db/releases) 也附带预编译二进制。
+每个 [Release](https://github.com/LinduanTof/dbrix/releases) 也附带预编译二进制。
 
 ### Arch Linux(AUR)
 
-`bdb-bin`(预编译)与 `bdb`(源码构建)的 PKGBUILD 位于 [`packaging/aur`](packaging/aur)，推送步骤见该目录的 README。
+`dbrix-bin`(预编译)与 `dbrix`(源码构建)的 PKGBUILD 位于 [`packaging/aur`](packaging/aur)，推送步骤见该目录的 README。
 
 ### go install
 
 要求 Go 1.26+。
 
 ```bash
-go install github.com/LinduanTof/b-db/cmd/bdb@latest
-```
-
-安装指定版本：
-
-```bash
-go install github.com/LinduanTof/b-db/cmd/bdb@v0.3.0
+go install github.com/LinduanTof/dbrix/cmd/dbrix@latest
 ```
 
 二进制默认安装到 `$(go env GOPATH)/bin`（设置了 `GOBIN` 时使用该目录）。确保它在 `PATH` 中：
 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"
-bdb --version
+dbrix --version
 ```
 
 ### 从源码构建
 
 ```bash
 make demo-db     # 生成 SQLite 示例库 testdata/demo.db
-make build       # 输出 bin/bdb
+make build       # 输出 bin/dbrix
 ```
 
 ## 快速开始
 
 ```bash
-bdb --config config.example.yaml            # go install 安装的二进制
-./bin/bdb --config config.example.yaml      # 从源码构建的二进制
+dbrix --config config.example.yaml            # go install 安装的二进制
+./bin/dbrix --config config.example.yaml      # 从源码构建的二进制
 ```
 
-默认配置文件路径为 `$XDG_CONFIG_HOME/bdb/config.yaml`（通常是 `~/.config/bdb/config.yaml`），可用 `--config` 覆盖。首次启动时若文件不存在，会自动创建一份带注释的默认模板（权限 `0600`），不会覆盖已有文件。
+默认配置文件路径为 `$XDG_CONFIG_HOME/dbrix/config.yaml`（通常是 `~/.config/dbrix/config.yaml`），可用 `--config` 覆盖。首次启动时若文件不存在，会自动创建一份带注释的默认模板（权限 `0600`），不会覆盖已有文件。
 
 配置文件最小示例：
 
@@ -122,9 +116,9 @@ connections:
     type: mysql
     host: 127.0.0.1
     port: 3306
-    user: bdb
+    user: dbrix
     password: ${MYSQL_PASSWORD}
-    database: bdb
+    database: dbrix
 ```
 
 `password` 等字段支持 `${ENV_VAR}` 引用；变量未设置时启动会报错并指出连接名与字段，不会静默使用空字符串。建议 `chmod 600` 配置文件。PostgreSQL 的 `database` 可省略，省略时连接到 `postgres` 库，连上后仍可在侧栏浏览所有数据库。`query.timeout` 设为 `unlimited`（或在 `Esc` 选项菜单选择「Unlimited」）会禁用客户端查询超时，查询只能手动取消；连接建立超时仍为 10 秒。
@@ -174,7 +168,7 @@ connections:
 | 结果 | `c` | 复制当前单元格（OSC 52） |
 | 结果 | `Ctrl+E` / `Ctrl+J` / `Ctrl+M` | 导出 CSV / JSON / Markdown |
 
-> 普通终端通常无法区分 `Ctrl+Enter` 与 `Enter`。bdb 会请求终端的键盘增强协议（Kitty protocol）；若终端不支持，请使用 `F5` 执行。
+> 普通终端通常无法区分 `Ctrl+Enter` 与 `Enter`。dbrix 会请求终端的键盘增强协议（Kitty protocol）；若终端不支持，请使用 `F5` 执行。
 
 ## 选项菜单
 
@@ -199,7 +193,7 @@ connections:
 启动时传入脚本会在连接默认连接后自动执行，最后一条查询的结果显示在结果面板：
 
 ```bash
-./bin/bdb --config config.yaml ./migrations/001_init.sql
+./bin/dbrix --config config.yaml ./migrations/001_init.sql
 ```
 
 脚本按分号切分，支持单引号/双引号/反引号字符串、`--`、`/* */` 注释；MySQL 下支持 `#` 注释与 `DELIMITER`，PostgreSQL 下支持 `$tag$...$tag$` dollar-quoting 并保留 `#` 运算符。任一语句失败会停止并报告语句序号。执行期间可按 `Esc` 取消。
@@ -210,7 +204,7 @@ connections:
 
 - 密码字段以掩码显示；也可以填写 `${ENV_VAR}` 引用环境变量。
 - 保存后会自动建立连接，新数据源立即出现在侧栏。
-- 运行时添加的连接保存在 `$XDG_STATE_HOME/bdb/connections.yaml`（权限 `0600`），启动时与主配置合并；同名连接不会重复添加。
+- 运行时添加的连接保存在 `$XDG_STATE_HOME/dbrix/connections.yaml`（权限 `0600`），启动时与主配置合并；同名连接不会重复添加。
 - 字段会根据类型动态变化：SQLite 只需要名称与路径；MySQL 与 Navicat 一样不需要填写数据库名；Redis 填写地址、密码与数据库编号；MongoDB 填写连接 URI。
 - 表单内容居中展示，label 固定宽度左对齐；当前字段以 `▸` 标记并在底部显示操作提示。
 
@@ -285,7 +279,7 @@ connections:
 - CSV：表级单个文件；数据库级输出到目录，每表一个文件
 - JSON：表级为对象数组；数据库级为 `{ "schema.table": [...] }`
 
-文件写入导出目录，默认是启动时的工作目录。可在 `Esc` 选项菜单的「Export directory」中修改：输入绝对路径或相对路径（相对当前工作目录），留空恢复为当前工作目录；目录不存在时会自动创建。选择保存在 `$XDG_STATE_HOME/bdb/export_dir`，也可用配置 `ui.export_dir` 设置默认值。命名为 `bdb-<名称>-<时间戳>.<扩展名>`。导出使用流式游标逐行读取并写入磁盘，内存占用与表大小无关（不会把整表载入内存）；状态栏实时显示当前表与进度（库级显示表计数，单表每 10 万行更新一次行数），完成后显示路径。导出总超时为 30 分钟。Excel 单个工作表最多 1,048,575 行，超出会报错，请改用 CSV 或 SQL。导出仅适用于 PostgreSQL、MySQL 和 SQLite；Redis 与 MongoDB 的节点菜单不显示导出项。
+文件写入导出目录，默认是启动时的工作目录。可在 `Esc` 选项菜单的「Export directory」中修改：输入绝对路径或相对路径（相对当前工作目录），留空恢复为当前工作目录；目录不存在时会自动创建。选择保存在 `$XDG_STATE_HOME/dbrix/export_dir`，也可用配置 `ui.export_dir` 设置默认值。命名为 `dbrix-<名称>-<时间戳>.<扩展名>`。导出使用流式游标逐行读取并写入磁盘，内存占用与表大小无关（不会把整表载入内存）；状态栏实时显示当前表与进度（库级显示表计数，单表每 10 万行更新一次行数），完成后显示路径。导出总超时为 30 分钟。Excel 单个工作表最多 1,048,575 行，超出会报错，请改用 CSV 或 SQL。导出仅适用于 PostgreSQL、MySQL 和 SQLite；Redis 与 MongoDB 的节点菜单不显示导出项。
 
 ## 数据编辑
 
@@ -323,7 +317,7 @@ connections:
 - 添加列（列名、类型、是否可空、默认值）、删除列（从列列表中选择）
 - 创建索引（索引名、列、是否唯一）、删除索引（从索引列表中选择）
 
-选中数据库节点后选择「Create table」，输入表名和列定义（例如 `id INTEGER PRIMARY KEY, name TEXT`）即可建表。若该数据库不是当前会话，bdb 会先切换过去，确保表建在正确的位置。视图不提供新增行、导入和「Manage」写操作。
+选中数据库节点后选择「Create table」，输入表名和列定义（例如 `id INTEGER PRIMARY KEY, name TEXT`）即可建表。若该数据库不是当前会话，dbrix 会先切换过去，确保表建在正确的位置。视图不提供新增行、导入和「Manage」写操作。
 
 所有变更都会先显示生成的 SQL，按 `y` 后才执行。SQLite 的清空使用 `DELETE FROM`。`read_only` 连接会拒绝结构变更，且这些操作只对 PostgreSQL、MySQL 和 SQLite 提供。
 
@@ -349,7 +343,7 @@ MongoDB：
 
 每个连接作为独立会话保留编辑器内容、结果网格、补全与编辑缓存。在侧栏切换到另一个配置连接时自动保存当前状态，切回时恢复；断开当前连接不会影响其他会话。
 
-SQL 标签也按连接隔离：每个会话保存自己的标签列表和活动标签，切换连接时一起恢复。标签内容会自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`，应用重启后连接时恢复。
+SQL 标签也按连接隔离：每个会话保存自己的标签列表和活动标签，切换连接时一起恢复。标签内容会自动持久化到 `$XDG_STATE_HOME/dbrix/editor_tabs.yaml`，应用重启后连接时恢复。
 
 关闭会话：
 
@@ -407,7 +401,7 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 - 每个连接拥有独立的 SQL 标签组，切换连接时整套标签一起切换
 - `Ctrl+T` 新建、`Ctrl+W` 关闭、`Ctrl+Tab` / `Ctrl+Shift+Tab` 或 `Alt+←/→` 切换
-- 标签内容、标题和当前活动标签会自动保存到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`（权限 `0600`），重启并连接后恢复
+- 标签内容、标题和当前活动标签会自动保存到 `$XDG_STATE_HOME/dbrix/editor_tabs.yaml`（权限 `0600`），重启并连接后恢复
 - 最后一个标签不能关闭，避免编辑器没有可用标签
 
 ## SQL 自动补全
@@ -420,7 +414,7 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 ## 主题
 
-内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或按 `Esc` 打开选项菜单后用 `←`/`→` 切换。运行时选择会写入 `$XDG_STATE_HOME/bdb/theme`，下次启动自动恢复；该状态文件优先于 `ui.theme`，若想改回配置文件中的主题，请先删除此状态文件。
+内置 6 套主题：`default`、`dracula`、`gruvbox`、`nord`、`catppuccin`、`solarized-light`。可在配置文件中设置 `ui.theme`，或按 `Esc` 打开选项菜单后用 `←`/`→` 切换。运行时选择会写入 `$XDG_STATE_HOME/dbrix/theme`，下次启动自动恢复；该状态文件优先于 `ui.theme`，若想改回配置文件中的主题，请先删除此状态文件。
 
 ![dracula 主题与三栏布局](docs/images/09-theme-columns.png)
 
@@ -428,7 +422,7 @@ DDL 与索引查看器支持 `↑`/`↓`、`PgUp`/`PgDn`、`g`/`G` 滚动，`Esc
 
 ## 查询历史
 
-成功执行的语句会持久化到 `$XDG_STATE_HOME/bdb/history`（默认 `~/.local/state/bdb/history`），文件权限为 `0600`，最多保留 500 条。编辑器内用 `Ctrl+P` / `Ctrl+N` 浏览。
+成功执行的语句会持久化到 `$XDG_STATE_HOME/dbrix/history`（默认 `~/.local/state/dbrix/history`），文件权限为 `0600`，最多保留 500 条。编辑器内用 `Ctrl+P` / `Ctrl+N` 浏览。
 
 ## 开发
 
@@ -447,11 +441,11 @@ PostgreSQL / MySQL 集成验证：
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
-PGPASSWORD=bdb psql -h 127.0.0.1 -U bdb -d bdb
-mysql -h 127.0.0.1 -ubdb -pbdb bdb
+PGPASSWORD=dbrix psql -h 127.0.0.1 -U dbrix -d dbrix
+mysql -h 127.0.0.1 -udbrix -pdbrix dbrix
 ```
 
-若本地端口已被占用，可用环境变量覆盖：`BDB_PG_PORT=5433 BDB_MYSQL_PORT=3307 docker compose ... up -d`。
+若本地端口已被占用，可用环境变量覆盖：`DBRIX_PG_PORT=5433 DBRIX_MYSQL_PORT=3307 docker compose ... up -d`。
 
 性能基准：
 
@@ -462,7 +456,7 @@ go test -bench . -benchmem ./internal/ui/results ./internal/ui/editor
 静态发布：
 
 ```bash
-make release          # 生成 dist/bdb-linux-amd64、arm64 与 checksums.txt
+make release          # 生成 dist/dbrix-linux-amd64、arm64 与 checksums.txt
 goreleaser release --clean
 ```
 

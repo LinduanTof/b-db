@@ -2,35 +2,35 @@
 
 ## 项目简介
 
-`bdb` 是一款使用 Go + Bubble Tea v2 构建的终端数据库客户端(TUI)。单个二进制支持 PostgreSQL、MySQL、SQLite、Redis 和 MongoDB:连接浏览、SQL 编辑执行、事务化单元格编辑、表结构查看,以及 CSV/JSON/Markdown 导出。面向用户的 README 和大部分 UI 文案为中英双语。
+`dbrix` 是一款使用 Go + Bubble Tea v2 构建的终端数据库客户端(TUI)。单个二进制支持 PostgreSQL、MySQL、SQLite、Redis 和 MongoDB:连接浏览、SQL 编辑执行、事务化单元格编辑、表结构查看,以及 CSV/JSON/Markdown 导出。面向用户的 README 和大部分 UI 文案为中英双语。
 
 ## 常用命令
 
 ```bash
 make demo-db      # 根据 testdata/schema.sql 生成 testdata/demo.db(需要 sqlite3 命令)
-make build        # 生成 bin/bdb,启用 trimpath 与 -s -w
-make run          # go run ./cmd/bdb
+make build        # 生成 bin/dbrix,启用 trimpath 与 -s -w
+make run          # go run ./cmd/dbrix
 make test         # 先执行 demo-db,再执行 go test ./...
 make vet
 go test ./...     # 需要 testdata/demo.db 已经存在
-./bin/bdb --config config.example.yaml
-./bin/bdb --config config.yaml ./migrations/001_init.sql   # 可选脚本,连接后自动执行
+./bin/dbrix --config config.example.yaml
+./bin/dbrix --config config.yaml ./migrations/001_init.sql   # 可选脚本,连接后自动执行
 ```
 
 - 需要 Go 1.26+(`go.mod` 中为 `go 1.26.4`)。CI 使用 `go.mod` 中的版本,在 `main` 与 `dev` 上执行 build、vet、生成 demo 数据库以及 `-race` 测试。
 - 全新检出后请用 `make test`。`internal/app` 的测试会直接读取 `testdata/demo.db`,文件不存在时会 `t.Fatal`。
 - 基准测试:`go test -bench . -benchmem ./internal/ui/results ./internal/ui/editor`
 - 发布:`make release`(linux amd64/arm64,关闭 CGO)或 `goreleaser release --clean`。
-- 集成数据库:`docker compose -f deploy/docker-compose.yml up -d`;可用 `BDB_PG_PORT`、`BDB_MYSQL_PORT`、`BDB_REDIS_PORT`、`BDB_MONGO_PORT` 覆盖端口。常规测试不依赖外部数据库(SQL 测试使用临时 SQLite)。
+- 集成数据库:`docker compose -f deploy/docker-compose.yml up -d`;可用 `DBRIX_PG_PORT`、`DBRIX_MYSQL_PORT`、`DBRIX_REDIS_PORT`、`DBRIX_MONGO_PORT` 覆盖端口。常规测试不依赖外部数据库(SQL 测试使用临时 SQLite)。
 
 ## 架构说明
 
 ### 入口与启动流程
 
-`cmd/bdb/main.go`:
+`cmd/dbrix/main.go`:
 
 1. 解析 `--config`、`--version` 以及一个可选的位置参数 SQL 脚本。
-2. 若 `$XDG_CONFIG_HOME/bdb/config.yaml` 不存在,创建带注释的默认配置(权限 `0600`),绝不覆盖已有文件。
+2. 若 `$XDG_CONFIG_HOME/dbrix/config.yaml` 不存在,创建带注释的默认配置(权限 `0600`),绝不覆盖已有文件。
 3. 加载并校验配置,输出非致命警告,创建 i18n 翻译器。
 4. 构造根 `app.Model`,加载查询历史,启动 Bubble Tea。
 
@@ -52,7 +52,7 @@ go test ./...     # 需要 testdata/demo.db 已经存在
 - 侧栏光标用 `sidebar.CursorPath()`/`RestoreCursor(path)` 按节点路径恢复;`pendingCursor` 会保留到树中出现匹配节点,以覆盖表/列节点的异步加载。切换会话时仅当目标会话上次停留在 `contextTables` 才重新加载概览,否则保留上次的表数据或查询结果。关闭或断开后必须调用 `sidebar.CollapseSession` 收起对应节点:断开连接(`disconnectConnection`)会关闭同 base 的全部派生会话并折叠连接根,关闭单个会话只折叠其数据库节点。
 - 侧栏的活动会话标记由 `syncSidebarSessions` 注入(`sessions` 的 key 加当前连接)。新增连接、断开、切换或重置会话后必须调用它,否则侧栏的 `●`/`◉` 状态和活动数量会过期。
 - PostgreSQL、MySQL、MongoDB 连接成功后会在连接节点下列出所有数据库,并在内存中克隆出 `<连接名>/<数据库名>` 派生会话;每个数据库是独立会话。`SupportsDatabases` 决定哪些类型使用数据库列表,`databaseIsSchema` 决定数据库节点下直接加载表(MySQL/MongoDB)还是 schema(PostgreSQL)。数据库列表在连接切换后保留,点击连接根只展开列表,点击数据库节点才切换会话。派生配置只存在于 `cfg.Connections` 中,不写入运行时连接文件。数据库发现由 `db.DatabaseLister` 可选接口完成。
-- SQL 编辑器支持按连接隔离的多标签(`tabs.go`);标签内容通过 `tab_state.go` 自动持久化到 `$XDG_STATE_HOME/bdb/editor_tabs.yaml`(0600,临时文件 + rename)。新增需要持久化的标签字段时同步修改 `savedTab`/`savedTabs` 与 `collectTabStates`;仅内存使用的 `editorTab.source` 故意不持久化,重启后表标签去重不会命中。
+- SQL 编辑器支持按连接隔离的多标签(`tabs.go`);标签内容通过 `tab_state.go` 自动持久化到 `$XDG_STATE_HOME/dbrix/editor_tabs.yaml`(0600,临时文件 + rename)。新增需要持久化的标签字段时同步修改 `savedTab`/`savedTabs` 与 `collectTabStates`;仅内存使用的 `editorTab.source` 故意不持久化,重启后表标签去重不会命中。
 - 编辑器获得焦点时 `q` 不退出;`Ctrl+C` 始终退出。浮层打开时 `q` 退出,其他按键先交给浮层处理。
 
 ### UI 组件(`internal/ui/*`)
@@ -92,12 +92,12 @@ func (m *Model) View() string
 
 | 用途 | 位置 |
 |---|---|
-| 主配置 | `$XDG_CONFIG_HOME/bdb/config.yaml`(默认 `~/.config/bdb/config.yaml`) |
-| 运行时添加的连接 | `$XDG_STATE_HOME/bdb/connections.yaml` |
-| 查询历史 | `$XDG_STATE_HOME/bdb/history` |
-| 当前主题 | `$XDG_STATE_HOME/bdb/theme` |
-| 当前布局 | `$XDG_STATE_HOME/bdb/layout` |
-| 导出目录 | `$XDG_STATE_HOME/bdb/export_dir` |
+| 主配置 | `$XDG_CONFIG_HOME/dbrix/config.yaml`(默认 `~/.config/dbrix/config.yaml`) |
+| 运行时添加的连接 | `$XDG_STATE_HOME/dbrix/connections.yaml` |
+| 查询历史 | `$XDG_STATE_HOME/dbrix/history` |
+| 当前主题 | `$XDG_STATE_HOME/dbrix/theme` |
+| 当前布局 | `$XDG_STATE_HOME/dbrix/layout` |
+| 导出目录 | `$XDG_STATE_HOME/dbrix/export_dir` |
 
 - `${ENV_VAR}` 展开适用于大多数连接字符串字段;变量缺失时会报错并指出连接名与字段,不会静默使用空字符串。
 - 运行时连接仅在主配置中不存在同名连接时才合并;新增数据源会保存原始 `${VAR}` 引用,但当前会话使用展开后的副本连接。

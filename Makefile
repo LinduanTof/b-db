@@ -1,14 +1,14 @@
-BINARY := bdb
+BINARY := dbrix
 DIST := dist
 LDFLAGS := -s -w
 
 .PHONY: build run test vet tidy demo-db release clean
 
 build:
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/bdb
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/dbrix
 
 run:
-	go run ./cmd/bdb
+	go run ./cmd/dbrix
 
 test: demo-db
 	go test ./...
@@ -26,8 +26,8 @@ demo-db:
 
 release:
 	mkdir -p $(DIST)
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-amd64 ./cmd/bdb
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-arm64 ./cmd/bdb
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-amd64 ./cmd/dbrix
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/$(BINARY)-linux-arm64 ./cmd/dbrix
 	cd $(DIST) && sha256sum $(BINARY)-linux-* > checksums.txt
 
 clean:

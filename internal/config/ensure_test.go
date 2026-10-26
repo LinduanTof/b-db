@@ -8,7 +8,7 @@ import (
 )
 
 func TestEnsureFileCreates(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "bdb", "config.yaml")
+	path := filepath.Join(t.TempDir(), "nested", "dbrix", "config.yaml")
 	created, err := EnsureFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -59,8 +59,8 @@ func TestEnsureFileCreates(t *testing.T) {
 }
 
 func TestResolvePath(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/bdb-xdg")
-	if got := ResolvePath(""); got != "/tmp/bdb-xdg/bdb/config.yaml" {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/dbrix-xdg")
+	if got := ResolvePath(""); got != "/tmp/dbrix-xdg/dbrix/config.yaml" {
 		t.Fatalf("default path = %q", got)
 	}
 	if got := ResolvePath("/tmp/custom.yaml"); got != "/tmp/custom.yaml" {

@@ -1,4 +1,4 @@
-module github.com/LinduanTof/b-db
+module github.com/LinduanTof/dbrix
 
 go 1.26.4
 

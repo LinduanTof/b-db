@@ -71,7 +71,7 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type Config struct {
-	// Deprecated: kept so existing config files still load. bdb no longer
+	// Deprecated: kept so existing config files still load. dbrix no longer
 	// connects automatically on startup.
 	DefaultConnection string       `yaml:"default_connection"`
 	UI                UIConfig     `yaml:"ui"`
@@ -119,17 +119,17 @@ func Defaults() Config {
 
 func DefaultPath() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "bdb", "config.yaml")
+		return filepath.Join(dir, "dbrix", "config.yaml")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".config", "bdb", "config.yaml")
+		return filepath.Join(".config", "dbrix", "config.yaml")
 	}
-	return filepath.Join(home, ".config", "bdb", "config.yaml")
+	return filepath.Join(home, ".config", "dbrix", "config.yaml")
 }
 
-const defaultConfigTemplate = `# bdb configuration
-# Add connections here, or press "a" inside bdb to add one.
+const defaultConfigTemplate = `# dbrix configuration
+# Add connections here, or press "a" inside dbrix to add one.
 
 ui:
   language: auto

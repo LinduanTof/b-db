@@ -8,13 +8,13 @@ import (
 
 func ThemeStatePath() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "bdb", "theme")
+		return filepath.Join(dir, "dbrix", "theme")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".local", "state", "bdb", "theme")
+		return filepath.Join(".local", "state", "dbrix", "theme")
 	}
-	return filepath.Join(home, ".local", "state", "bdb", "theme")
+	return filepath.Join(home, ".local", "state", "dbrix", "theme")
 }
 
 func LoadThemeState() string {

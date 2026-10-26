@@ -1,11 +1,11 @@
-# bdb
+# dbrix
 
 **English** | [简体中文](README.zh.md)
 
-[![CI](https://github.com/LinduanTof/b-db/actions/workflows/go.yml/badge.svg)](https://github.com/LinduanTof/b-db/actions/workflows/go.yml)
-[![Release](https://img.shields.io/github/v/release/LinduanTof/b-db)](https://github.com/LinduanTof/b-db/releases)
-[![Go version](https://img.shields.io/github/go-mod/go-version/LinduanTof/b-db)](go.mod)
-[![License](https://img.shields.io/github/license/LinduanTof/b-db)](LICENSE)
+[![CI](https://github.com/LinduanTof/dbrix/actions/workflows/go.yml/badge.svg)](https://github.com/LinduanTof/dbrix/actions/workflows/go.yml)
+[![Release](https://img.shields.io/github/v/release/LinduanTof/dbrix)](https://github.com/LinduanTof/dbrix/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/LinduanTof/dbrix)](go.mod)
+[![License](https://img.shields.io/github/license/LinduanTof/dbrix)](LICENSE)
 
 A modern database client for the Linux terminal, built with Go and [Bubble Tea v2](https://github.com/charmbracelet/bubbletea). It aims to keep connection management, schema browsing, SQL editing, data editing and export inside a single terminal window.
 
@@ -13,17 +13,17 @@ Implemented: PostgreSQL/MySQL/SQLite browsing and queries, transactional cell ed
 
 ## Screenshots
 
-![bdb demo](docs/images/en/demo.gif)
+![dbrix demo](docs/images/en/demo.gif)
 
-![bdb main window](docs/images/en/01-main.png)
+![dbrix main window](docs/images/en/01-main.png)
 
 Browse databases and tables in the sidebar, write SQL in the editor and inspect editable results. Each section below includes a screenshot taken from a real run.
 
-## How bdb compares
+## How dbrix compares
 
-bdb focuses on breadth (SQL and NoSQL in one TUI), safe edits and zero-dependency distribution.
+dbrix focuses on breadth (SQL and NoSQL in one TUI), safe edits and zero-dependency distribution.
 
-| Database | bdb | [lazysql](https://github.com/jorgerojas26/lazysql) | [rainfrog](https://github.com/achristmascarl/rainfrog) | [harlequin](https://github.com/tconbeer/harlequin) | [dblab](https://github.com/danvergara/dblab) |
+| Database | dbrix | [lazysql](https://github.com/jorgerojas26/lazysql) | [rainfrog](https://github.com/achristmascarl/rainfrog) | [harlequin](https://github.com/tconbeer/harlequin) | [dblab](https://github.com/danvergara/dblab) |
 |---|:-:|:-:|:-:|:-:|:-:|
 | PostgreSQL | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MySQL / MariaDB | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -34,7 +34,7 @@ bdb focuses on breadth (SQL and NoSQL in one TUI), safe edits and zero-dependenc
 | SQL Server | – | ✅ | – | ✅ | ✅ |
 | DuckDB / Snowflake | – | – | – | ✅ | – |
 
-What bdb adds on top of the basics:
+What dbrix adds on top of the basics:
 
 - **One binary, five databases**: SQL and NoSQL sessions share the same editor, result grid and history.
 - **Safe cell editing**: `UPDATE`/`DELETE` previews plus transactional execution that must touch exactly one row.
@@ -48,51 +48,45 @@ What bdb adds on top of the basics:
 ### Homebrew (Linux)
 
 ```bash
-brew install LinduanTof/tap/bdb
+brew install LinduanTof/tap/dbrix
 ```
 
-Every [release](https://github.com/LinduanTof/b-db/releases) also ships prebuilt binaries.
+Every [release](https://github.com/LinduanTof/dbrix/releases) also ships prebuilt binaries.
 
 ### Arch Linux (AUR)
 
-PKGBUILDs for `bdb-bin` (prebuilt) and `bdb` (built from source) live in [`packaging/aur`](packaging/aur); see the README there for publishing to the AUR.
+PKGBUILDs for `dbrix-bin` (prebuilt) and `dbrix` (built from source) live in [`packaging/aur`](packaging/aur); see the README there for publishing to the AUR.
 
 ### go install
 
 Go 1.26+ is required.
 
 ```bash
-go install github.com/LinduanTof/b-db/cmd/bdb@latest
-```
-
-Pin a specific version:
-
-```bash
-go install github.com/LinduanTof/b-db/cmd/bdb@v0.3.0
+go install github.com/LinduanTof/dbrix/cmd/dbrix@latest
 ```
 
 The binary is installed to `$(go env GOPATH)/bin` (or `GOBIN` when set). Make sure it is on your `PATH`:
 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"
-bdb --version
+dbrix --version
 ```
 
 ### Build from source
 
 ```bash
 make demo-db     # generate the SQLite demo database at testdata/demo.db
-make build       # writes bin/bdb
+make build       # writes bin/dbrix
 ```
 
 ## Quick start
 
 ```bash
-bdb --config config.example.yaml            # binary installed with go install
-./bin/bdb --config config.example.yaml      # binary built from source
+dbrix --config config.example.yaml            # binary installed with go install
+./bin/dbrix --config config.example.yaml      # binary built from source
 ```
 
-The default config path is `$XDG_CONFIG_HOME/bdb/config.yaml` (usually `~/.config/bdb/config.yaml`); override it with `--config`. On first launch a commented default template is created with mode `0600` when the file does not exist. Existing files are never overwritten.
+The default config path is `$XDG_CONFIG_HOME/dbrix/config.yaml` (usually `~/.config/dbrix/config.yaml`); override it with `--config`. On first launch a commented default template is created with mode `0600` when the file does not exist. Existing files are never overwritten.
 
 Minimal configuration:
 
@@ -122,12 +116,12 @@ connections:
     type: mysql
     host: 127.0.0.1
     port: 3306
-    user: bdb
+    user: dbrix
     password: ${MYSQL_PASSWORD}
-    database: bdb
+    database: dbrix
 ```
 
-Fields such as `password` support `${ENV_VAR}` references. A missing variable is reported at startup with the connection name and field instead of silently becoming an empty string. `chmod 600` the config file. PostgreSQL `database` may be omitted; bdb then connects to `postgres` and still lists every database in the sidebar. Setting `query.timeout` to `unlimited` (or choosing "Unlimited" in the `Esc` options menu) disables the client-side query timeout and leaves cancellation manual; the connection timeout stays at 10 seconds.
+Fields such as `password` support `${ENV_VAR}` references. A missing variable is reported at startup with the connection name and field instead of silently becoming an empty string. `chmod 600` the config file. PostgreSQL `database` may be omitted; dbrix then connects to `postgres` and still lists every database in the sidebar. Setting `query.timeout` to `unlimited` (or choosing "Unlimited" in the `Esc` options menu) disables the client-side query timeout and leaves cancellation manual; the connection timeout stays at 10 seconds.
 
 ## Keyboard shortcuts
 
@@ -174,7 +168,7 @@ Fields such as `password` support `${ENV_VAR}` references. A missing variable is
 | Results | `c` | Copy the current cell (OSC 52) |
 | Results | `Ctrl+E` / `Ctrl+J` / `Ctrl+M` | Export CSV / JSON / Markdown |
 
-> Most terminals cannot distinguish `Ctrl+Enter` from `Enter`. bdb requests the Kitty keyboard protocol; use `F5` when the terminal does not support it.
+> Most terminals cannot distinguish `Ctrl+Enter` from `Enter`. dbrix requests the Kitty keyboard protocol; use `F5` when the terminal does not support it.
 
 ## Options menu
 
@@ -199,7 +193,7 @@ Pressing `q` while the menu is open quits.
 A script passed on the command line runs automatically after connecting to the default connection, and the last query's result appears in the results pane:
 
 ```bash
-./bin/bdb --config config.yaml ./migrations/001_init.sql
+./bin/dbrix --config config.yaml ./migrations/001_init.sql
 ```
 
 Statements are split on semicolons with awareness of single-quoted, double-quoted and backtick strings, `--` and `/* */` comments; MySQL additionally supports `#` comments and `DELIMITER`, and PostgreSQL supports `$tag$...$tag$` dollar-quoting while keeping the `#` operator. The first failing statement stops the run and reports its index. Press `Esc` to cancel while it is running.
@@ -210,7 +204,7 @@ Press `a` in the sidebar or results pane, or choose "Add data source" in the opt
 
 - Password fields are masked; `${ENV_VAR}` references are also accepted.
 - Saving connects immediately and the new source appears in the sidebar.
-- Runtime connections are stored in `$XDG_STATE_HOME/bdb/connections.yaml` (mode `0600`) and merged with the main config at startup; duplicate names are skipped.
+- Runtime connections are stored in `$XDG_STATE_HOME/dbrix/connections.yaml` (mode `0600`) and merged with the main config at startup; duplicate names are skipped.
 - Fields change with the type: SQLite only needs a name and path; MySQL needs no database name (like Navicat); Redis asks for address, password and database number; MongoDB asks for a connection URI.
 - The form is centered with fixed-width, left-aligned labels; the active field is marked with `▸` and the footer shows the available keys.
 
@@ -285,7 +279,7 @@ Press `m` on a table or database node; the Export group offers five formats:
 - CSV: a single file for a table; a directory with one file per table for a database
 - JSON: an array of objects for a table; `{ "schema.table": [...] }` for a database
 
-Files are written to the export directory, which defaults to the working directory at startup. Change it under "Export directory" in the `Esc` options menu: enter an absolute or relative path (relative to the working directory) or leave it empty to reset; missing directories are created. The choice is stored in `$XDG_STATE_HOME/bdb/export_dir` and `ui.export_dir` sets the default. Files are named `bdb-<name>-<timestamp>.<ext>`. Exports stream rows with a forward cursor, so memory use is independent of table size. The status bar shows the current table and progress (table count for database exports, row counts every 100k rows for a table), then the path. The overall export timeout is 30 minutes. An Excel worksheet holds at most 1,048,575 rows; larger tables must use CSV or SQL. Exporting is available for PostgreSQL, MySQL and SQLite only; Redis and MongoDB nodes do not show Export.
+Files are written to the export directory, which defaults to the working directory at startup. Change it under "Export directory" in the `Esc` options menu: enter an absolute or relative path (relative to the working directory) or leave it empty to reset; missing directories are created. The choice is stored in `$XDG_STATE_HOME/dbrix/export_dir` and `ui.export_dir` sets the default. Files are named `dbrix-<name>-<timestamp>.<ext>`. Exports stream rows with a forward cursor, so memory use is independent of table size. The status bar shows the current table and progress (table count for database exports, row counts every 100k rows for a table), then the path. The overall export timeout is 30 minutes. An Excel worksheet holds at most 1,048,575 rows; larger tables must use CSV or SQL. Exporting is available for PostgreSQL, MySQL and SQLite only; Redis and MongoDB nodes do not show Export.
 
 ## Editing data
 
@@ -295,7 +289,7 @@ Enabled only for results opened through the table actions menu's "View data" on 
 - `x` deletes the current row: preview the `DELETE` → press `y`
 - Writes run in a transaction and must affect exactly one row
 - Editing or deleting in paged table data reloads the current page
-- With `read_only: true` cell editing and write statements are blocked; bdb additionally rejects SQL `EXECUTE`, write-style SQLite `PRAGMA`s, all Redis commands except a conservative read-only allowlist (including `EVAL`/`FCALL`, `SETBIT`, `SORT ... STORE`) and MongoDB `$out`, `$merge`, `$where`, `$function` and `$accumulator`. This is a conservative client-side check; use a read-only database account or replica as the real boundary.
+- With `read_only: true` cell editing and write statements are blocked; dbrix additionally rejects SQL `EXECUTE`, write-style SQLite `PRAGMA`s, all Redis commands except a conservative read-only allowlist (including `EVAL`/`FCALL`, `SETBIT`, `SORT ... STORE`) and MongoDB `$out`, `$merge`, `$where`, `$function` and `$accumulator`. This is a conservative client-side check; use a read-only database account or replica as the real boundary.
 - "Insert row template" in the table actions menu generates an `INSERT` template in the editor
 - "Insert row" in the table actions menu opens a form with one field per column. Empty fields are omitted so the column default applies, `NULL` writes a null and `''` writes an empty string. A single integer primary key may be left empty and is generated by the database. The `INSERT` is previewed and runs in a transaction that must affect exactly one row
 
@@ -323,7 +317,7 @@ Select a table in the sidebar, press `m` and choose **Manage**:
 - Add column (name, type, nullable, default) and drop column (picked from the column list)
 - Create index (name, columns, unique) and drop index (picked from the index list)
 
-Select a database node and choose **Create table** to create a table from a name plus a column-definition body such as `id INTEGER PRIMARY KEY, name TEXT`. If that database is not the current session, bdb switches to it first so the table is created in the right place. Write actions (insert, import, Manage) are hidden for views.
+Select a database node and choose **Create table** to create a table from a name plus a column-definition body such as `id INTEGER PRIMARY KEY, name TEXT`. If that database is not the current session, dbrix switches to it first so the table is created in the right place. Write actions (insert, import, Manage) are hidden for views.
 
 Every change shows the generated SQL in a confirm box and runs only after `y`. SQLite truncates with `DELETE FROM`. Schema changes are rejected on `read_only` connections and are only offered for PostgreSQL, MySQL and SQLite.
 
@@ -349,7 +343,7 @@ MongoDB:
 
 Every connection keeps its own editor content, results grid, completion and edit caches. Switching to another configured connection saves the current state and restores it when you return; disconnecting does not affect other sessions.
 
-SQL tabs are also isolated per connection: each session keeps its own tab list and active tab. Tab contents are persisted to `$XDG_STATE_HOME/bdb/editor_tabs.yaml` and restored after a restart when you connect again.
+SQL tabs are also isolated per connection: each session keeps its own tab list and active tab. Tab contents are persisted to `$XDG_STATE_HOME/dbrix/editor_tabs.yaml` and restored after a restart when you connect again.
 
 Closing sessions:
 
@@ -407,7 +401,7 @@ Editor queries have no row limit and load their results into memory at once; add
 
 - Every connection owns a separate set of SQL tabs
 - `Ctrl+T` opens, `Ctrl+W` closes, `Ctrl+Tab` / `Ctrl+Shift+Tab` or `Alt+←/→` switch
-- Tab contents, titles and the active tab are saved to `$XDG_STATE_HOME/bdb/editor_tabs.yaml` (mode `0600`) and restored after a restart
+- Tab contents, titles and the active tab are saved to `$XDG_STATE_HOME/dbrix/editor_tabs.yaml` (mode `0600`) and restored after a restart
 - The last tab cannot be closed, so the editor always has one
 
 ## SQL autocomplete
@@ -420,7 +414,7 @@ Completion pops up while you type identifiers and can be triggered with `Ctrl+Sp
 
 ## Themes
 
-Six themes ship with bdb: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin` and `solarized-light`. Set `ui.theme` in the config or switch with `←`/`→` in the `Esc` options menu. The runtime choice is written to `$XDG_STATE_HOME/bdb/theme` and restored on the next launch; that state file wins over `ui.theme`, so delete it to go back to the configured theme.
+Six themes ship with dbrix: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin` and `solarized-light`. Set `ui.theme` in the config or switch with `←`/`→` in the `Esc` options menu. The runtime choice is written to `$XDG_STATE_HOME/dbrix/theme` and restored on the next launch; that state file wins over `ui.theme`, so delete it to go back to the configured theme.
 
 ![dracula theme with columns layout](docs/images/en/09-theme-columns.png)
 
@@ -428,7 +422,7 @@ Six themes ship with bdb: `default`, `dracula`, `gruvbox`, `nord`, `catppuccin` 
 
 ## Query history
 
-Successfully executed statements are persisted to `$XDG_STATE_HOME/bdb/history` (default `~/.local/state/bdb/history`) with mode `0600`, keeping the latest 500 entries. Browse them in the editor with `Ctrl+P` / `Ctrl+N`.
+Successfully executed statements are persisted to `$XDG_STATE_HOME/dbrix/history` (default `~/.local/state/dbrix/history`) with mode `0600`, keeping the latest 500 entries. Browse them in the editor with `Ctrl+P` / `Ctrl+N`.
 
 ## Development
 
@@ -447,11 +441,11 @@ PostgreSQL / MySQL integration checks:
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
-PGPASSWORD=bdb psql -h 127.0.0.1 -U bdb -d bdb
-mysql -h 127.0.0.1 -ubdb -pbdb bdb
+PGPASSWORD=dbrix psql -h 127.0.0.1 -U dbrix -d dbrix
+mysql -h 127.0.0.1 -udbrix -pdbrix dbrix
 ```
 
-Override ports when they are taken: `BDB_PG_PORT=5433 BDB_MYSQL_PORT=3307 docker compose ... up -d`.
+Override ports when they are taken: `DBRIX_PG_PORT=5433 DBRIX_MYSQL_PORT=3307 docker compose ... up -d`.
 
 Benchmarks:
 
@@ -462,7 +456,7 @@ go test -bench . -benchmem ./internal/ui/results ./internal/ui/editor
 Static releases:
 
 ```bash
-make release          # dist/bdb-linux-amd64, arm64 and checksums.txt
+make release          # dist/dbrix-linux-amd64, arm64 and checksums.txt
 goreleaser release --clean
 ```
 

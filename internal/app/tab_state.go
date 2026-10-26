@@ -28,13 +28,13 @@ var tabStateMu sync.Mutex
 
 func tabStatePath() string {
 	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
-		return filepath.Join(dir, "bdb", "editor_tabs.yaml")
+		return filepath.Join(dir, "dbrix", "editor_tabs.yaml")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".local", "state", "bdb", "editor_tabs.yaml")
+		return filepath.Join(".local", "state", "dbrix", "editor_tabs.yaml")
 	}
-	return filepath.Join(home, ".local", "state", "bdb", "editor_tabs.yaml")
+	return filepath.Join(home, ".local", "state", "dbrix", "editor_tabs.yaml")
 }
 
 func loadTabStates() (map[string]savedTabs, error) {

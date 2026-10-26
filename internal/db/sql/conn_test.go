@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LinduanTof/b-db/internal/db"
+	"github.com/LinduanTof/dbrix/internal/db"
 )
 
 func TestMemorySQLiteUsesSingleConnection(t *testing.T) {

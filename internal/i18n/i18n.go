@@ -61,7 +61,7 @@ func (t *Translator) T(key string, args ...any) string {
 }
 
 var en = map[string]string{
-	KeyAppTitle: "bdb",
+	KeyAppTitle: "dbrix",
 
 	KeyPaneConnections: "Connections",
 	KeyPaneSQL:         "SQL",
@@ -201,7 +201,7 @@ var en = map[string]string{
 	KeyCmdTheme:      "switch color theme (use the next theme or a name)",
 	KeyCmdHelp:       "show keyboard shortcuts and commands",
 	KeyCmdReload:     "reconnect the current connection",
-	KeyCmdQuit:       "quit bdb",
+	KeyCmdQuit:       "quit dbrix",
 	KeyCmdDescribe:   "show structure of the selected table",
 	KeyCmdRun:        "execute a SQL file",
 	KeyCmdAdd:        "add a new data source",
@@ -344,7 +344,7 @@ var en = map[string]string{
 }
 
 var zh = map[string]string{
-	KeyAppTitle: "bdb",
+	KeyAppTitle: "dbrix",
 
 	KeyPaneConnections: "连接",
 	KeyPaneSQL:         "SQL",
@@ -484,7 +484,7 @@ var zh = map[string]string{
 	KeyCmdTheme:      "切换配色主题（切换到下一个或指定名称）",
 	KeyCmdHelp:       "显示快捷键与命令帮助",
 	KeyCmdReload:     "重新连接当前连接",
-	KeyCmdQuit:       "退出 bdb",
+	KeyCmdQuit:       "退出 dbrix",
 	KeyCmdDescribe:   "查看选中表的结构",
 	KeyCmdRun:        "执行 SQL 文件",
 	KeyCmdAdd:        "添加新的数据源",
