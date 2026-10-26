@@ -113,7 +113,7 @@ func TestEscOpensOptionsMenu(t *testing.T) {
 		t.Fatal("esc should open the options menu")
 	}
 	content := m.View().Content
-	for _, want := range []string{"Options", "ACTIONS", "SETTINGS", "Theme", "Language"} {
+	for _, want := range []string{"Options", "Actions", "Settings", "add a new data source"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("menu missing %q:\n%s", want, content)
 		}
@@ -182,9 +182,7 @@ func TestOptionsMenu(t *testing.T) {
 	defer theme.Set("default")
 
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 6; i++ {
-		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	}
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})
 	if theme.Current() != "catppuccin" {
 		t.Fatalf("theme = %q, want catppuccin", theme.Current())
@@ -989,21 +987,6 @@ func TestAutoFocusLayout(t *testing.T) {
 	}
 }
 
-func TestMenuFocusLayout(t *testing.T) {
-	m := testModel(t, "en")
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 12; i++ {
-		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
-	}
-	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.zoom {
-		t.Fatal("menu action should enable focused layout")
-	}
-	if m.options.IsOpen() {
-		t.Fatal("menu should close after the action")
-	}
-}
-
 func TestMouseClickZoomResults(t *testing.T) {
 	m := testModel(t, "en")
 	m = connect(t, m)
@@ -1248,7 +1231,8 @@ func TestSessionSwitchCancelsMutation(t *testing.T) {
 func TestMenuSettings(t *testing.T) {
 	m := testModel(t, "en")
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyEsc})
-	for i := 0; i < 8; i++ {
+	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	for i := 0; i < 2; i++ {
 		m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	}
 	m = sendKey(t, m, tea.KeyPressMsg{Code: tea.KeyRight})

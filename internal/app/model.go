@@ -788,7 +788,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		m.completion.Close()
-		m.options.Open("", m.menuItems())
+		m.options.OpenTabs("", []string{
+			m.t.T(i18n.KeyMenuTabActions),
+			m.t.T(i18n.KeyMenuTabSettings),
+		}, m.menuItems())
 		return nil
 	}
 	if key == "f2" {
@@ -2073,8 +2076,6 @@ func (m *Model) runMenuAction(msg menu.ActionMsg) tea.Cmd {
 		m.dirInput.Open(m.outDir)
 	case "help":
 		m.showHelp = true
-	case "zoom":
-		m.toggleZoom()
 	case "quit":
 		m.shutdown()
 		return tea.Quit
@@ -2354,23 +2355,16 @@ func (m *Model) menuItems() []menu.Item {
 	}
 
 	return []menu.Item{
-		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuActions},
 		{ID: "add", LabelKey: i18n.KeyCmdAdd, Kind: menu.KindAction},
 		{ID: "disconnect", LabelKey: i18n.KeyCmdDisconnect, Kind: menu.KindAction},
-		{ID: "export.csv", LabelKey: i18n.KeyMenuExportCSV, Kind: menu.KindAction},
-		{ID: "export.json", LabelKey: i18n.KeyMenuExportJSON, Kind: menu.KindAction},
-		{ID: "export.md", LabelKey: i18n.KeyMenuExportMarkdown, Kind: menu.KindAction},
 		{ID: "help", LabelKey: i18n.KeyCmdHelp, Kind: menu.KindAction},
-		{Kind: menu.KindHeader, LabelKey: i18n.KeyMenuSettings},
-		{ID: "theme", LabelKey: i18n.KeyMenuTheme, Kind: menu.KindChoice, Choices: themes, Value: themeValue},
-		{ID: "lang", LabelKey: i18n.KeyMenuLanguage, Kind: menu.KindChoice, Choices: langs, Value: langValue},
-		{ID: "timeout", LabelKey: i18n.KeyMenuTimeout, Kind: menu.KindChoice, Choices: timeoutLabels(m.t), Value: timeoutValue},
-		{ID: "maxrows", LabelKey: i18n.KeyMenuMaxRows, Kind: menu.KindChoice, Choices: maxRowLabels(), Value: rowValue},
-		{ID: "layout", LabelKey: i18n.KeyMenuLayoutMode, Kind: menu.KindChoice, Choices: m.layoutLabels(), Value: layoutValue},
-		{ID: "exportdir", LabelKey: i18n.KeyMenuExportDir, Kind: menu.KindAction},
-		{ID: "zoom", LabelKey: i18n.KeyMenuLayout, Kind: menu.KindAction},
-		{Kind: menu.KindHeader},
 		{ID: "quit", LabelKey: i18n.KeyCmdQuit, Kind: menu.KindAction},
+		{ID: "theme", LabelKey: i18n.KeyMenuTheme, Kind: menu.KindChoice, Choices: themes, Value: themeValue, Tab: 1},
+		{ID: "lang", LabelKey: i18n.KeyMenuLanguage, Kind: menu.KindChoice, Choices: langs, Value: langValue, Tab: 1},
+		{ID: "timeout", LabelKey: i18n.KeyMenuTimeout, Kind: menu.KindChoice, Choices: timeoutLabels(m.t), Value: timeoutValue, Tab: 1},
+		{ID: "maxrows", LabelKey: i18n.KeyMenuMaxRows, Kind: menu.KindChoice, Choices: maxRowLabels(), Value: rowValue, Tab: 1},
+		{ID: "layout", LabelKey: i18n.KeyMenuLayoutMode, Kind: menu.KindChoice, Choices: m.layoutLabels(), Value: layoutValue, Tab: 1},
+		{ID: "exportdir", LabelKey: i18n.KeyMenuExportDir, Kind: menu.KindAction, Tab: 1},
 	}
 }
 

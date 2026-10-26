@@ -26,6 +26,7 @@ type Item struct {
 	Kind     Kind
 	Choices  []string
 	Value    int
+	Tab      int
 }
 
 type ActionMsg struct {
@@ -45,6 +46,10 @@ type Model struct {
 	title         string
 	items         []Item
 	selected      int
+	tabs          []string
+	tab           int
+	tabLine       int
+	tabRanges     [][2]int
 }
 
 func New(t *i18n.Translator) Model {
@@ -56,10 +61,24 @@ func (m *Model) SetSize(width, height int) {
 }
 
 func (m *Model) Open(title string, items []Item) {
+	m.openWith(title, nil, items)
+}
+
+// OpenTabs opens a menu whose items are grouped into tabs. Items select their
+// tab with Item.Tab.
+func (m *Model) OpenTabs(title string, tabs []string, items []Item) {
+	m.openWith(title, tabs, items)
+}
+
+func (m *Model) openWith(title string, tabs []string, items []Item) {
 	m.open = true
 	m.title = title
 	m.items = append([]Item(nil), items...)
+	m.tabs = append([]string(nil), tabs...)
+	m.tab = 0
 	m.selected = 0
+	m.tabLine = -1
+	m.tabRanges = nil
 	if len(m.items) > 0 {
 		m.normalizeSelection(1)
 	}
@@ -86,6 +105,10 @@ func (m *Model) Update(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		return *m, m.adjust(1)
 	case "enter":
 		return m.activate(m.selected)
+	case "tab":
+		m.switchTab(1)
+	case "shift+tab":
+		m.switchTab(-1)
 	}
 	return *m, nil
 }
@@ -125,8 +148,22 @@ func (m *Model) innerWidth() int {
 func (m *Model) bodyLines(inner int) ([]string, []int) {
 	width := max(1, inner-2)
 	lines := []string{""}
+	m.tabLine = -1
+	m.tabRanges = nil
+	if len(m.tabs) > 1 {
+		m.tabLine = len(lines)
+		tabLine, ranges := m.renderTabs(width)
+		m.tabRanges = ranges
+		lines = append(lines, tabLine, theme.Muted.Render(strings.Repeat("─", width)))
+	}
 	itemLines := make([]int, len(m.items))
+	for i := range itemLines {
+		itemLines[i] = -1
+	}
 	for i, item := range m.items {
+		if len(m.tabs) > 1 && item.Tab != m.tab {
+			continue
+		}
 		if item.Kind == KindHeader && item.LabelKey != "" && len(lines) > 1 && lines[len(lines)-1] != "" {
 			lines = append(lines, "")
 		}
@@ -139,6 +176,25 @@ func (m *Model) bodyLines(inner int) ([]string, []int) {
 	}
 	lines = append(lines, "")
 	return lines, itemLines
+}
+
+func (m *Model) renderTabs(width int) (string, [][2]int) {
+	var b strings.Builder
+	b.WriteString(" ")
+	x := 1
+	ranges := make([][2]int, len(m.tabs))
+	for i, label := range m.tabs {
+		block := " " + label + " "
+		style := theme.Muted
+		if i == m.tab {
+			style = theme.CellCursor
+		}
+		ranges[i] = [2]int{x, x + textutil.Width(block)}
+		b.WriteString(style.Render(block))
+		x += textutil.Width(block) + 1
+		b.WriteString(" ")
+	}
+	return textutil.FitLine(textutil.Truncate(b.String(), width), width), ranges
 }
 
 func (m *Model) renderSection(item Item, width int) string {
@@ -221,6 +277,16 @@ func (m *Model) HandleClick(x, y, screenW, screenH int) (Model, tea.Cmd) {
 	}
 	_, itemLines := m.bodyLines(m.innerWidth())
 	row := y - y0 - 1 // top border
+	if row == m.tabLine && len(m.tabs) > 1 {
+		contentX := x - x0 - 2 // border + left padding
+		for i, span := range m.tabRanges {
+			if contentX >= span[0] && contentX < span[1] {
+				m.selectTab(i)
+				return *m, nil
+			}
+		}
+		return *m, nil
+	}
 	for i, line := range itemLines {
 		if line == row {
 			return m.click(i)
@@ -233,7 +299,8 @@ func (m *Model) click(index int) (Model, tea.Cmd) {
 	if index < 0 || index >= len(m.items) {
 		return *m, nil
 	}
-	if m.items[index].Kind == KindHeader {
+	item := m.items[index]
+	if item.Kind == KindHeader || item.Tab != m.tab {
 		return *m, nil
 	}
 	if m.selected != index {
@@ -285,7 +352,8 @@ func (m *Model) move(delta int) {
 	}
 	for step := 0; step < len(m.items); step++ {
 		m.selected = (m.selected + delta + len(m.items)) % len(m.items)
-		if m.items[m.selected].Kind != KindHeader {
+		item := m.items[m.selected]
+		if item.Kind != KindHeader && item.Tab == m.tab {
 			return
 		}
 	}
@@ -293,16 +361,38 @@ func (m *Model) move(delta int) {
 
 func (m *Model) normalizeSelection(delta int) {
 	for step := 0; step < len(m.items); step++ {
-		if m.items[m.selected].Kind != KindHeader {
+		item := m.items[m.selected]
+		if item.Kind != KindHeader && item.Tab == m.tab {
 			return
 		}
 		m.selected = (m.selected + delta + len(m.items)) % len(m.items)
 	}
 }
 
+func (m *Model) switchTab(delta int) {
+	if len(m.tabs) <= 1 {
+		return
+	}
+	m.selectTab((m.tab + delta + len(m.tabs)) % len(m.tabs))
+}
+
+func (m *Model) selectTab(index int) {
+	if index < 0 || index >= len(m.tabs) {
+		return
+	}
+	m.tab = index
+	for i, item := range m.items {
+		if item.Tab == m.tab && item.Kind != KindHeader {
+			m.selected = i
+			return
+		}
+	}
+	m.selected = 0
+}
+
 func (m *Model) adjust(delta int) tea.Cmd {
 	item := m.selectedItem()
-	if item == nil || item.Kind != KindChoice || len(item.Choices) == 0 {
+	if item == nil || item.Kind != KindChoice || item.Tab != m.tab || len(item.Choices) == 0 {
 		return nil
 	}
 	item.Value = (item.Value + delta + len(item.Choices)) % len(item.Choices)
