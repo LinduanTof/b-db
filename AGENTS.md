@@ -113,7 +113,7 @@ func (m *Model) View() string
 - 根模型测试通过 `tea.KeyPressMsg` 和 `internal/app/model_test.go` 中的辅助函数(`runCmd`、`sendKey`、`connect`)驱动 TUI,并断言渲染内容。新增交互测试时沿用这些辅助函数。
 - SQL 驱动测试使用临时 SQLite 数据库,无需 Docker 即可运行。Redis/Mongo 测试只覆盖解析和辅助函数。
 - 没有 golangci-lint 配置;声明的静态检查是 `go vet ./...`。
-- 面向用户的文案应放入 i18n 表;新增快捷键或菜单项时要同时补充中英文帮助文本。用户可见功能还需同步更新 `README.md` 和 `config.example.yaml`。
+- 面向用户的文案应放入 i18n 表;新增快捷键或菜单项时要同时补充中英文帮助文本。用户可见功能还需同步更新 `README.md`(英文)、`README.zh.md`(中文)和 `config.example.yaml`。
 
 ## 注意事项
 
