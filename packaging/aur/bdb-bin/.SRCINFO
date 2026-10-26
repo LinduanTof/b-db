@@ -1,0 +1,17 @@
+pkgbase = bdb-bin
+	pkgdesc = Terminal database client for PostgreSQL, MySQL, SQLite, Redis and MongoDB
+	pkgver = 0.3.2
+	pkgrel = 1
+	url = https://github.com/LinduanTof/b-db
+	arch = x86_64
+	arch = aarch64
+	license = Apache-2.0
+	provides = bdb
+	conflicts = bdb
+	options = !strip
+	source_x86_64 = https://github.com/LinduanTof/b-db/releases/download/v0.3.2/bdb_0.3.2_linux_amd64.tar.gz
+	sha256sums_x86_64 = 1f3d21014b26f2377695e31b3f8966b8129663874048405806644f6941ac476c
+	source_aarch64 = https://github.com/LinduanTof/b-db/releases/download/v0.3.2/bdb_0.3.2_linux_arm64.tar.gz
+	sha256sums_aarch64 = 2e08293a50575c4a81dc391514c8188a1095a978a854c1b5cafa70ba2b814e68
+
+pkgname = bdb-bin
